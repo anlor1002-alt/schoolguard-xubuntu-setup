@@ -216,8 +216,56 @@ class XubuntuAgent:
         self.overlay_proc = None
         self.ws = None
 
+        # Lưu bản sao mã nguồn vào RAM lúc khởi chạy để tự phục hồi nếu học sinh xóa file trên ổ cứng
+        self._self_code = ""
+        self._overlay_code = ""
+        try:
+            with open(os.path.abspath(__file__), "r", encoding="utf-8") as f:
+                self._self_code = f.read()
+            if os.path.exists(OVERLAY_SCRIPT):
+                with open(OVERLAY_SCRIPT, "r", encoding="utf-8") as f:
+                    self._overlay_code = f.read()
+        except Exception:
+            pass
+
         self._write_state_file()
         self._protect_veyon_master()
+
+    def _self_heal_files(self):
+        """Tự động khôi phục lại file mã nguồn và cấu hình khởi động cùng máy từ RAM nếu bị học sinh xóa"""
+        try:
+            my_path = os.path.abspath(__file__)
+            my_dir = os.path.dirname(my_path)
+            os.makedirs(my_dir, exist_ok=True)
+
+            if self._self_code and not os.path.exists(my_path):
+                with open(my_path, "w", encoding="utf-8") as f:
+                    f.write(self._self_code)
+                os.chmod(my_path, 0o755)
+
+            if self._overlay_code and not os.path.exists(OVERLAY_SCRIPT):
+                with open(OVERLAY_SCRIPT, "w", encoding="utf-8") as f:
+                    f.write(self._overlay_code)
+                os.chmod(OVERLAY_SCRIPT, 0o755)
+
+            if not os.path.exists(CONFIG_PATH):
+                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f)
+
+            # Đảm bảo file Autostart cùng máy Xubuntu luôn tồn tại
+            if os.geteuid() != 0:
+                autostart_dir = os.path.expanduser("~/.config/autostart")
+                autostart_file = os.path.join(autostart_dir, "schoolguard-agent.desktop")
+                if not os.path.exists(autostart_file):
+                    os.makedirs(autostart_dir, exist_ok=True)
+                    with open(autostart_file, "w", encoding="utf-8") as f:
+                        f.write(
+                            "[Desktop Entry]\nType=Application\nName=SchoolGuard Classroom Service\n"
+                            f"Exec=/usr/bin/python3 {my_path}\nHidden=false\nNoDisplay=true\n"
+                            "X-GNOME-Autostart-enabled=true\nStartupNotify=false\n"
+                        )
+        except Exception:
+            pass
 
     def _load_config(self):
         if os.path.exists(CONFIG_PATH):
@@ -712,8 +760,9 @@ class XubuntuAgent:
 
         while True:
             now = time.time()
-            # 1. Đảm bảo cửa sổ khóa/trình chiếu và xinput luôn đúng trạng thái
+            # 1. Đảm bảo cửa sổ khóa/trình chiếu, xinput và file tự hồi sinh luôn đúng trạng thái
             try:
+                self._self_heal_files()
                 self.ensure_overlay_process()
                 if self.mode == "lock" and not self.disabled_xinput_ids:
                     self.set_input_locked(True)
