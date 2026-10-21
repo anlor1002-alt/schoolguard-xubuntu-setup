@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=2. Cài Đặt SchoolGuard (Bấm Đúp - Bước 2)
+Comment=Cài đặt nhanh hệ thống quản lý phòng máy SchoolGuard kết nối về VPS HTTPS
+Exec=sh -c 'DIR="$(cd "$(dirname "%k")" 2>/dev/null && pwd || pwd)"; echo "=== BƯỚC 2: ĐANG CÀI ĐẶT SCHOOLGUARD KẾT NỐI VỀ VPS ==="; if [ -f "$DIR/install.sh" ]; then bash "$DIR/install.sh"; elif [ -f "./install.sh" ]; then bash "./install.sh"; else (wget -qO /tmp/sg_install.sh https://103-149-172-179.sslip.io/install.sh || wget -qO /tmp/sg_install.sh http://103.149.172.179:4000/install.sh) && bash /tmp/sg_install.sh; fi; echo ""; echo "Nhấn Enter để hoàn tất..."; read line'
+Icon=utilities-terminal
+Terminal=true
+Categories=System;Utility;
+StartupNotify=true

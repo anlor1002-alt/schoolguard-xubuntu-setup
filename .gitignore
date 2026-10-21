@@ -1,0 +1,19 @@
+# Server directory must never be in client repository
+server/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Teamwork and agent metadata
+.agents/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# OS generated files
+.DS_Store
+Thumbs.db

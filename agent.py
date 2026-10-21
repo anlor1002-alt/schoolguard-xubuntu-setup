@@ -209,8 +209,9 @@ class XubuntuAgent:
         self.machine_name = self.hostname
         self.lock_message = "Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên."
         self.live_focus = False
-        self.auto_heal_veyon = True
-        self.veyon_status = "unknown"
+        self.auto_heal_veyon = False
+        self.veyon_disabled = True
+        self.veyon_status = "disabled"
         self.veyon_restarts = 0
         self.disabled_xinput_ids = set()
         self.overlay_proc = None
@@ -394,8 +395,7 @@ class XubuntuAgent:
                     pass
 
     def check_and_heal_veyon(self):
-        """Kiểm tra dịch vụ Veyon và tự động bật lại nếu bị tắt"""
-        service_names = ("veyon.service", "veyon")
+        """Kiểm tra dịch vụ Veyon và dập tắt triệt để nếu ở trạng thái disabled"""
         installed = any(
             os.path.exists(p)
             for p in (
@@ -407,6 +407,18 @@ class XubuntuAgent:
         )
         if not installed:
             self.veyon_status = "not_installed"
+            return
+
+        if self.veyon_disabled:
+            # Active suppression: kill any stray Veyon process immediately
+            try:
+                has_proc = subprocess.run(["pgrep", "-f", "veyon-"], stdout=subprocess.DEVNULL).returncode == 0
+                if has_proc:
+                    for proc_name in ("veyon-worker", "veyon-master", "veyon-service", "veyon-server"):
+                        subprocess.run(["pkill", "-9", "-f", proc_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            self.veyon_status = "disabled"
             return
 
         try:
@@ -600,6 +612,8 @@ class XubuntuAgent:
                 self.live_focus = bool(payload["live_focus"])
             if "auto_heal_veyon" in payload:
                 self.auto_heal_veyon = bool(payload["auto_heal_veyon"])
+            if "veyon_disabled" in payload:
+                self.veyon_disabled = bool(payload["veyon_disabled"])
 
         elif cmd == "LOCK":
             self.mode = "lock"
@@ -611,8 +625,23 @@ class XubuntuAgent:
 
         elif cmd == "UNLOCK":
             self.mode = "normal"
+            # Rescue student screen from any lingering Veyon lock
+            subprocess.run(["pkill", "-9", "-f", "veyon-worker"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-9", "-f", "veyon-master"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.set_input_locked(False)
             self.ensure_overlay_process()
+            self._send_status()
+
+        elif cmd == "DISABLE_VEYON":
+            self.veyon_disabled = True
+            self.auto_heal_veyon = False
+            subprocess.run(["systemctl", "stop", "veyon.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["systemctl", "disable", "veyon.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["systemctl", "mask", "veyon.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for proc_name in ("veyon-worker", "veyon-master", "veyon-service", "veyon-server"):
+                subprocess.run(["pkill", "-9", "-f", proc_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.set_input_locked(False)
+            self.veyon_status = "disabled"
             self._send_status()
 
         elif cmd == "BROADCAST_START":
@@ -644,8 +673,11 @@ class XubuntuAgent:
             self._send_status()
 
         elif cmd == "RESTART_VEYON":
+            self.veyon_disabled = False
             self.auto_heal_veyon = True
             try:
+                subprocess.run(["systemctl", "unmask", "veyon.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["systemctl", "enable", "veyon.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["systemctl", "restart", "veyon.service"], timeout=6)
                 self.veyon_restarts += 1
                 self.veyon_status = "running"

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=1. Xóa Sạch Veyon (Bấm Đúp - Bước 1)
+Comment=Tắt hẳn, gỡ bỏ và vô hiệu hóa hoàn toàn Veyon khỏi máy học sinh
+Exec=sh -c 'DIR="$(cd "$(dirname "%k")" 2>/dev/null && pwd || pwd)"; echo "=== BƯỚC 1: ĐANG TẮT VÀ XÓA SẠCH VEYON KHỎI MÁY HỌC SINH ==="; if [ -f "$DIR/remove-veyon.sh" ]; then bash "$DIR/remove-veyon.sh"; elif [ -f "./remove-veyon.sh" ]; then bash "./remove-veyon.sh"; else (wget -qO /tmp/sg_remove_veyon.sh https://103-149-172-179.sslip.io/remove-veyon.sh || wget -qO /tmp/sg_remove_veyon.sh http://103.149.172.179:4000/remove-veyon.sh) && bash /tmp/sg_remove_veyon.sh; fi; echo ""; echo "Nhấn Enter để hoàn tất..."; read line'
+Icon=edit-delete
+Terminal=true
+Categories=System;Utility;
+StartupNotify=true
