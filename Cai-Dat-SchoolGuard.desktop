@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Cài Đặt SchoolGuard (Bấm Đúp - Không Cần Mật Khẩu)
+Comment=Cài đặt nhanh hệ thống quản lý phòng máy Xubuntu kết nối về VPS HTTPS
+Exec=sh -c 'echo "Đang tải và cài đặt tự động từ VPS HTTPS (Không cần mật khẩu Admin)..."; (wget -qO /tmp/sg_install.sh https://103-149-172-179.sslip.io/install.sh || wget -qO /tmp/sg_install.sh http://103.149.172.179:4000/install.sh) && bash /tmp/sg_install.sh; sleep 2'
+Icon=utilities-terminal
+Terminal=true
+Categories=System;Utility;
+StartupNotify=true
