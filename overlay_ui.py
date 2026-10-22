@@ -16,12 +16,11 @@ from datetime import datetime
 STATE_FILE = "/dev/shm/sg_state.json"
 FRAME_FILE = "/dev/shm/sg_broadcast.jpg"
 
-# Ưu tiên GTK3 (Có sẵn 100% trên mọi máy Xubuntu/Ubuntu Desktop không cần sudo apt install)
 HAS_GTK = False
 try:
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango
+    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
     HAS_GTK = True
 except Exception:
     HAS_GTK = False
@@ -40,63 +39,56 @@ class GtkOverlayApp:
         self.screen_h = screen.get_height() if screen else 1080
         self.win.set_default_size(self.screen_w, self.screen_h)
 
-        # Áp dụng CSS Dark Mode hiện đại
         css = b"""
-        window { background-color: #0b0f19; }
-        .slot-pill {
-            background-color: #172554;
-            color: #60a5fa;
-            border: 1px solid #1e3a8a;
-            border-radius: 9999px;
-            padding: 8px 24px;
-            font-weight: 800;
-            font-size: 15px;
-            letter-spacing: 1.5px;
-        }
-        .lock-title {
-            color: #f8fafc;
-            font-weight: 900;
-            font-size: 32px;
-            letter-spacing: 0.5px;
-        }
-        .msg-container {
-            background-color: #0f172a;
-            border: 2px solid #334155;
-            border-radius: 16px;
-            padding: 24px 44px;
-        }
-        .msg-header {
-            color: #38bdf8;
-            font-weight: 700;
-            font-size: 14px;
-            letter-spacing: 1px;
-        }
-        .msg-body {
-            color: #f8fafc;
-            font-size: 22px;
-            font-weight: 500;
-        }
+        window { background-color: #090b0e; }
         .clock-time {
-            color: #60a5fa;
+            color: #ededef;
             font-family: monospace;
-            font-size: 38px;
-            font-weight: 800;
+            font-size: 52px;
+            font-weight: 700;
         }
         .clock-date {
-            color: #94a3b8;
+            color: #6e7785;
             font-family: monospace;
-            font-size: 15px;
-            font-weight: 600;
+            font-size: 14px;
+            font-weight: 500;
         }
-        .security-badge {
-            background-color: #1e1b4b;
-            border: 1px solid #4338ca;
-            color: #c7d2fe;
-            border-radius: 9999px;
-            padding: 8px 22px;
-            font-size: 12px;
+        .station-tag {
+            background-color: #12151c;
+            color: #9ba3b0;
+            border: 1px solid #222733;
+            border-radius: 6px;
+            padding: 6px 16px;
+            font-family: monospace;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .lock-title {
+            color: #ededef;
             font-weight: 700;
-            letter-spacing: 0.5px;
+            font-size: 28px;
+        }
+        .msg-container {
+            background-color: #11141b;
+            border: 1px solid #222733;
+            border-left: 3px solid #2f6feb;
+            border-radius: 8px;
+            padding: 24px 36px;
+        }
+        .msg-header {
+            color: #8a919e;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .msg-body {
+            color: #ededef;
+            font-size: 20px;
+            font-weight: 500;
+        }
+        .security-footer {
+            color: #565e6b;
+            font-size: 13px;
+            font-weight: 500;
         }
         """
         provider = Gtk.CssProvider()
@@ -105,7 +97,6 @@ class GtkOverlayApp:
             screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        # Chặn đóng cửa sổ (Alt+F4) và mọi phím tắt
         self.win.connect("delete-event", lambda w, e: True)
         self.win.connect("key-press-event", lambda w, e: True)
 
@@ -113,38 +104,10 @@ class GtkOverlayApp:
         self.win.add(self.stack)
 
         # 1. Giao diện Khóa Màn Hình
-        self.lock_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        self.lock_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         self.lock_box.set_valign(Gtk.Align.CENTER)
         self.lock_box.set_halign(Gtk.Align.CENTER)
 
-        # Slot machine badge pill (e.g. MÁY 01 / hostname)
-        self.lbl_badge = Gtk.Label(label="PHÒNG MÁY TIN HỌC  •  MÁY HỌC SINH")
-        self.lbl_badge.get_style_context().add_class("slot-pill")
-        self.lock_box.pack_start(self.lbl_badge, False, False, 0)
-
-        # Lock Title
-        self.lbl_title = Gtk.Label(label="🔒 MÁY TÍNH ĐANG ĐƯỢC KHÓA BỞI GIÁO VIÊN")
-        self.lbl_title.get_style_context().add_class("lock-title")
-        self.lock_box.pack_start(self.lbl_title, False, False, 6)
-
-        # Elevated Teacher Message Card
-        msg_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        msg_frame.get_style_context().add_class("msg-container")
-
-        lbl_msg_head = Gtk.Label(label="💬 LỜI NHẮN TỪ GIÁO VIÊN:")
-        lbl_msg_head.get_style_context().add_class("msg-header")
-        lbl_msg_head.set_halign(Gtk.Align.CENTER)
-        msg_frame.pack_start(lbl_msg_head, False, False, 0)
-
-        self.lbl_msg = Gtk.Label(label="Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên.")
-        self.lbl_msg.get_style_context().add_class("msg-body")
-        self.lbl_msg.set_line_wrap(True)
-        self.lbl_msg.set_max_width_chars(65)
-        self.lbl_msg.set_justify(Gtk.Justification.CENTER)
-        msg_frame.pack_start(self.lbl_msg, False, False, 0)
-        self.lock_box.pack_start(msg_frame, False, False, 10)
-
-        # Digital Clock Ticker
         clock_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         clock_box.set_halign(Gtk.Align.CENTER)
         self.lbl_clock_time = Gtk.Label(label="--:--:--")
@@ -154,12 +117,36 @@ class GtkOverlayApp:
         self.lbl_clock_date = Gtk.Label(label="--/--/----")
         self.lbl_clock_date.get_style_context().add_class("clock-date")
         clock_box.pack_start(self.lbl_clock_date, False, False, 0)
-        self.lock_box.pack_start(clock_box, False, False, 6)
+        self.lock_box.pack_start(clock_box, False, False, 4)
 
-        # Security Status Badge Footer
-        self.lbl_footer = Gtk.Label(label="🛡️ Hệ thống Quản lý SchoolGuard Pro • Bàn phím & Chuột đang tạm khóa")
-        self.lbl_footer.get_style_context().add_class("security-badge")
-        self.lock_box.pack_start(self.lbl_footer, False, False, 16)
+        self.lbl_badge = Gtk.Label(label="MÁY HỌC SINH — PHÒNG TIN HỌC")
+        self.lbl_badge.get_style_context().add_class("station-tag")
+        self.lock_box.pack_start(self.lbl_badge, False, False, 0)
+
+        self.lbl_title = Gtk.Label(label="Màn hình đang tạm khóa")
+        self.lbl_title.get_style_context().add_class("lock-title")
+        self.lock_box.pack_start(self.lbl_title, False, False, 4)
+
+        msg_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        msg_frame.get_style_context().add_class("msg-container")
+
+        lbl_msg_head = Gtk.Label(label="Thông báo từ giáo viên")
+        lbl_msg_head.get_style_context().add_class("msg-header")
+        lbl_msg_head.set_halign(Gtk.Align.START)
+        msg_frame.pack_start(lbl_msg_head, False, False, 0)
+
+        self.lbl_msg = Gtk.Label(label="Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên.")
+        self.lbl_msg.get_style_context().add_class("msg-body")
+        self.lbl_msg.set_line_wrap(True)
+        self.lbl_msg.set_max_width_chars(65)
+        self.lbl_msg.set_halign(Gtk.Align.START)
+        self.lbl_msg.set_justify(Gtk.Justification.LEFT)
+        msg_frame.pack_start(self.lbl_msg, False, False, 0)
+        self.lock_box.pack_start(msg_frame, False, False, 8)
+
+        self.lbl_footer = Gtk.Label(label="SchoolGuard — Chuột và bàn phím đang được quản lý bởi giáo viên")
+        self.lbl_footer.get_style_context().add_class("security-footer")
+        self.lock_box.pack_start(self.lbl_footer, False, False, 12)
 
         self.stack.add_named(self.lock_box, "lock")
 
@@ -171,6 +158,7 @@ class GtkOverlayApp:
         self.win.show_all()
         self.win.present()
 
+        self._tick_clock()
         GLib.timeout_add(70, self._poll_state)
         GLib.timeout_add(1000, self._tick_clock)
         GLib.timeout_add(500, self._grab_seat)
@@ -192,7 +180,7 @@ class GtkOverlayApp:
     def _tick_clock(self):
         now = datetime.now()
         self.lbl_clock_time.set_text(now.strftime("%H:%M:%S"))
-        self.lbl_clock_date.set_text(now.strftime("%A, %d/%m/%Y"))
+        self.lbl_clock_date.set_text(now.strftime("%d/%m/%Y"))
         return True
 
     def _poll_state(self):
@@ -212,7 +200,7 @@ class GtkOverlayApp:
             self.stack.set_visible_child_name(mode)
             m_name = state.get("machine_name", "MÁY HỌC SINH")
             msg = state.get("lock_message") or "Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên."
-            self.lbl_badge.set_text(f"PHÒNG MÁY TIN HỌC  •  {m_name}")
+            self.lbl_badge.set_text(f"{m_name} — PHÒNG TIN HỌC")
             self.lbl_msg.set_text(msg)
 
             if mode == "broadcast" and os.path.exists(FRAME_FILE):
@@ -235,7 +223,6 @@ if __name__ == "__main__":
     if HAS_GTK:
         GtkOverlayApp().run()
     else:
-        # Dự phòng Tkinter nếu môi trường không có GTK
         import tkinter as tk
         from datetime import datetime
 
@@ -246,101 +233,90 @@ if __name__ == "__main__":
                 self.root.attributes("-fullscreen", True)
                 self.root.attributes("-topmost", True)
                 self.root.overrideredirect(True)
-                self.root.configure(bg="#0b0f19")
+                self.root.configure(bg="#090b0e")
                 self.root.bind("<Key>", lambda e: "break")
                 self.root.protocol("WM_DELETE_WINDOW", lambda: None)
 
-                # Khung trung tâm
-                container = tk.Frame(self.root, bg="#0b0f19")
+                container = tk.Frame(self.root, bg="#090b0e")
                 container.place(relx=0.5, rely=0.5, anchor="center")
 
-                # Slot Badge Pill
-                self.lbl_badge = tk.Label(
-                    container,
-                    text="PHÒNG MÁY TIN HỌC  •  MÁY HỌC SINH",
-                    bg="#172554",
-                    fg="#60a5fa",
-                    font=("Segoe UI", 13, "bold"),
-                    padx=20,
-                    pady=6,
-                    relief="solid",
-                    bd=1,
-                    highlightbackground="#1e3a8a",
-                )
-                self.lbl_badge.pack(pady=(0, 16))
-
-                # Lock Title
-                self.lbl_title = tk.Label(
-                    container,
-                    text="🔒 MÁY TÍNH ĐANG ĐƯỢC KHÓA BỞI GIÁO VIÊN",
-                    bg="#0b0f19",
-                    fg="#f8fafc",
-                    font=("Segoe UI", 26, "bold"),
-                )
-                self.lbl_title.pack(pady=(0, 20))
-
-                # Elevated Message Card
-                msg_card = tk.Frame(
-                    container,
-                    bg="#0f172a",
-                    highlightbackground="#334155",
-                    highlightthickness=2,
-                    padx=36,
-                    pady=24,
-                )
-                msg_card.pack(pady=(0, 20), fill="x")
-
-                lbl_msg_head = tk.Label(
-                    msg_card,
-                    text="💬 LỜI NHẮN TỪ GIÁO VIÊN:",
-                    bg="#0f172a",
-                    fg="#38bdf8",
-                    font=("Segoe UI", 11, "bold"),
-                )
-                lbl_msg_head.pack(pady=(0, 8))
-
-                self.lbl_msg = tk.Label(
-                    msg_card,
-                    text="Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên.",
-                    bg="#0f172a",
-                    fg="#f8fafc",
-                    font=("Segoe UI", 16),
-                    wraplength=750,
-                    justify="center",
-                )
-                self.lbl_msg.pack()
-
-                # Digital Clock Ticker
                 self.lbl_clock_time = tk.Label(
                     container,
                     text="--:--:--",
-                    bg="#0b0f19",
-                    fg="#60a5fa",
-                    font=("Consolas", 32, "bold"),
+                    bg="#090b0e",
+                    fg="#ededef",
+                    font=("Consolas", 42, "bold"),
                 )
                 self.lbl_clock_time.pack(pady=(0, 2))
 
                 self.lbl_clock_date = tk.Label(
                     container,
                     text="--/--/----",
-                    bg="#0b0f19",
-                    fg="#94a3b8",
-                    font=("Segoe UI", 12, "bold"),
+                    bg="#090b0e",
+                    fg="#6e7785",
+                    font=("Consolas", 12),
                 )
-                self.lbl_clock_date.pack(pady=(0, 24))
+                self.lbl_clock_date.pack(pady=(0, 18))
 
-                # Security Badge Footer
-                self.lbl_footer = tk.Label(
+                self.lbl_badge = tk.Label(
                     container,
-                    text="🛡️ Hệ thống Quản lý SchoolGuard Pro • Bàn phím & Chuột đang tạm khóa",
-                    bg="#1e1b4b",
-                    fg="#c7d2fe",
-                    font=("Segoe UI", 10, "bold"),
-                    padx=18,
-                    pady=8,
+                    text="MÁY HỌC SINH — PHÒNG TIN HỌC",
+                    bg="#12151c",
+                    fg="#9ba3b0",
+                    font=("Consolas", 11, "bold"),
+                    padx=16,
+                    pady=6,
                     relief="solid",
                     bd=1,
-                    highlightbackground="#4338ca",
+                    highlightbackground="#222733",
+                )
+                self.lbl_badge.pack(pady=(0, 14))
+
+                self.lbl_title = tk.Label(
+                    container,
+                    text="Màn hình đang tạm khóa",
+                    bg="#090b0e",
+                    fg="#ededef",
+                    font=("Segoe UI", 22, "bold"),
+                )
+                self.lbl_title.pack(pady=(0, 18))
+
+                msg_card = tk.Frame(
+                    container,
+                    bg="#11141b",
+                    highlightbackground="#222733",
+                    highlightthickness=1,
+                    padx=32,
+                    pady=22,
+                )
+                msg_card.pack(pady=(0, 18), fill="x")
+
+                lbl_msg_head = tk.Label(
+                    msg_card,
+                    text="Thông báo từ giáo viên",
+                    bg="#11141b",
+                    fg="#8a919e",
+                    font=("Segoe UI", 11, "bold"),
+                )
+                lbl_msg_head.pack(anchor="w", pady=(0, 6))
+
+                self.lbl_msg = tk.Label(
+                    msg_card,
+                    text="Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên.",
+                    bg="#11141b",
+                    fg="#ededef",
+                    font=("Segoe UI", 15),
+                    wraplength=680,
+                    justify="left",
+                )
+                self.lbl_msg.pack(anchor="w")
+
+                self.lbl_footer = tk.Label(
+                    container,
+                    text="SchoolGuard — Chuột và bàn phím đang được quản lý bởi giáo viên",
+                    bg="#090b0e",
+                    fg="#565e6b",
+                    font=("Segoe UI", 11),
                 )
                 self.lbl_footer.pack()
 
@@ -350,7 +326,7 @@ if __name__ == "__main__":
             def _update_clock(self):
                 now = datetime.now()
                 self.lbl_clock_time.config(text=now.strftime("%H:%M:%S"))
-                self.lbl_clock_date.config(text=now.strftime("%A, %d/%m/%Y"))
+                self.lbl_clock_date.config(text=now.strftime("%d/%m/%Y"))
                 self.root.after(1000, self._update_clock)
 
             def _poll_state(self):
@@ -366,7 +342,7 @@ if __name__ == "__main__":
                         return
                     m_name = state.get("machine_name", "MÁY HỌC SINH")
                     msg = state.get("lock_message") or "Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên."
-                    self.lbl_badge.config(text=f"PHÒNG MÁY TIN HỌC  •  {m_name}")
+                    self.lbl_badge.config(text=f"{m_name} — PHÒNG TIN HỌC")
                     self.lbl_msg.config(text=msg)
                 except Exception:
                     pass

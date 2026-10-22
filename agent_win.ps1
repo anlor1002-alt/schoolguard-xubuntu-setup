@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 # SchoolGuard Windows Agent (Zero-Dependency .NET / PowerShell)
 # Chạy ngầm 100% không hiện cửa sổ trên Windows 10/11 (Không cần cài Python)
 # Kết nối trực tiếp về VPS: wss://103-149-172-179.sslip.io/ws/agent
@@ -240,15 +240,15 @@ $uiPowershell.Runspace = $uiRunspace
     $centerCard.BackColor = [System.Drawing.Color]::FromArgb(9, 13, 22)
     $lockPanel.Controls.Add($centerCard)
 
-    # 1. Huy hiệu Số Máy (Machine Slot Badge Pill)
+    # 1. Huy hiệu Số Máy (Machine Slot Badge)
     $lblBadge = New-Object System.Windows.Forms.Label
-    $lblBadge.Text = "PHÒNG MÁY TIN HỌC  •  MÁY HỌC SINH"
-    $lblBadge.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Bold)
-    $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(23, 37, 84)
-    $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(96, 165, 250)
+    $lblBadge.Text = "MÁY HỌC SINH — PHÒNG TIN HỌC"
+    $lblBadge.Font = New-Object System.Drawing.Font("Consolas", 11, [System.Drawing.FontStyle]::Bold)
+    $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(18, 21, 28)
+    $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(155, 163, 176)
     $lblBadge.AutoSize = $false
     $lblBadge.Width = 420
-    $lblBadge.Height = 38
+    $lblBadge.Height = 36
     $lblBadge.Left = [int](($cardW - $lblBadge.Width) / 2)
     $lblBadge.Top = 0
     $lblBadge.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
@@ -256,62 +256,62 @@ $uiPowershell.Runspace = $uiRunspace
 
     # 2. Tiêu đề Khóa Máy
     $lblTitle = New-Object System.Windows.Forms.Label
-    $lblTitle.Text = "🔒 MÁY TÍNH ĐANG ĐƯỢC KHÓA BỞI GIÁO VIÊN"
+    $lblTitle.Text = "Màn hình đang tạm khóa"
     $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 24, [System.Drawing.FontStyle]::Bold)
-    $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
+    $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
     $lblTitle.AutoSize = $false
     $lblTitle.Width = $cardW
     $lblTitle.Height = 56
     $lblTitle.Left = 0
-    $lblTitle.Top = 54
+    $lblTitle.Top = 52
     $lblTitle.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
     $centerCard.Controls.Add($lblTitle)
 
-    # 3. Thẻ Thông Báo Giáo Viên Nổi Bật (Elevated Message Card)
+    # 3. Thẻ Thông Báo Giáo Viên
     $msgCard = New-Object System.Windows.Forms.Panel
-    $msgCard.Width = [Math]::Min(840, $cardW - 40)
+    $msgCard.Width = [Math]::Min(800, $cardW - 40)
     $msgCard.Height = 160
     $msgCard.Left = [int](($cardW - $msgCard.Width) / 2)
-    $msgCard.Top = 126
-    $msgCard.BackColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+    $msgCard.Top = 124
+    $msgCard.BackColor = [System.Drawing.Color]::FromArgb(17, 20, 27)
 
     # Đường viền điểm nhấn đầu thẻ thông báo
     $accentLine = New-Object System.Windows.Forms.Panel
-    $accentLine.Dock = [System.Windows.Forms.DockStyle]::Top
-    $accentLine.Height = 3
-    $accentLine.BackColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+    $accentLine.Dock = [System.Windows.Forms.DockStyle]::Left
+    $accentLine.Width = 3
+    $accentLine.BackColor = [System.Drawing.Color]::FromArgb(47, 111, 235)
     $msgCard.Controls.Add($accentLine)
 
     $lblMsgHead = New-Object System.Windows.Forms.Label
-    $lblMsgHead.Text = "💬 LỜI NHẮN TỪ GIÁO VIÊN:"
-    $lblMsgHead.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-    $lblMsgHead.ForeColor = [System.Drawing.Color]::FromArgb(56, 189, 248)
+    $lblMsgHead.Text = "Thông báo từ giáo viên"
+    $lblMsgHead.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $lblMsgHead.ForeColor = [System.Drawing.Color]::FromArgb(138, 145, 158)
     $lblMsgHead.AutoSize = $false
-    $lblMsgHead.Width = $msgCard.Width
-    $lblMsgHead.Height = 26
-    $lblMsgHead.Left = 0
-    $lblMsgHead.Top = 14
-    $lblMsgHead.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    $lblMsgHead.Width = $msgCard.Width - 40
+    $lblMsgHead.Height = 24
+    $lblMsgHead.Left = 24
+    $lblMsgHead.Top = 18
+    $lblMsgHead.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
     $msgCard.Controls.Add($lblMsgHead)
 
     $lblMsg = New-Object System.Windows.Forms.Label
     $lblMsg.Text = $SharedState.LockMessage
     $lblMsg.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Regular)
-    $lblMsg.ForeColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
+    $lblMsg.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
     $lblMsg.AutoSize = $false
-    $lblMsg.Width = $msgCard.Width - 30
+    $lblMsg.Width = $msgCard.Width - 48
     $lblMsg.Height = 100
-    $lblMsg.Left = 15
-    $lblMsg.Top = 46
-    $lblMsg.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    $lblMsg.Left = 24
+    $lblMsg.Top = 48
+    $lblMsg.TextAlign = [System.Drawing.ContentAlignment]::TopLeft
     $msgCard.Controls.Add($lblMsg)
     $centerCard.Controls.Add($msgCard)
 
     # 4. Đồng Hồ Số Điện Tử (Digital Clock Ticker)
     $lblClock = New-Object System.Windows.Forms.Label
     $lblClock.Text = "--:--:--"
-    $lblClock.Font = New-Object System.Drawing.Font("Consolas", 32, [System.Drawing.FontStyle]::Bold)
-    $lblClock.ForeColor = [System.Drawing.Color]::FromArgb(96, 165, 250)
+    $lblClock.Font = New-Object System.Drawing.Font("Consolas", 34, [System.Drawing.FontStyle]::Bold)
+    $lblClock.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
     $lblClock.AutoSize = $false
     $lblClock.Width = $cardW
     $lblClock.Height = 52
@@ -322,22 +322,22 @@ $uiPowershell.Runspace = $uiRunspace
 
     $lblDate = New-Object System.Windows.Forms.Label
     $lblDate.Text = "--/--/----"
-    $lblDate.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
-    $lblDate.ForeColor = [System.Drawing.Color]::FromArgb(148, 163, 184)
+    $lblDate.Font = New-Object System.Drawing.Font("Consolas", 11, [System.Drawing.FontStyle]::Regular)
+    $lblDate.ForeColor = [System.Drawing.Color]::FromArgb(110, 119, 133)
     $lblDate.AutoSize = $false
     $lblDate.Width = $cardW
     $lblDate.Height = 28
     $lblDate.Left = 0
-    $lblDate.Top = 360
+    $lblDate.Top = 358
     $lblDate.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
     $centerCard.Controls.Add($lblDate)
 
-    # 5. Huy Hiệu Trạng Thái Bảo Mật (Security Status Footer)
+    # 5. Trạng Thái Hệ Thống
     $lblFooter = New-Object System.Windows.Forms.Label
-    $lblFooter.Text = "🛡️ Hệ thống Quản lý SchoolGuard Pro • Bàn phím & Chuột đang tạm khóa"
-    $lblFooter.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $lblFooter.BackColor = [System.Drawing.Color]::FromArgb(30, 27, 75)
-    $lblFooter.ForeColor = [System.Drawing.Color]::FromArgb(199, 210, 254)
+    $lblFooter.Text = "SchoolGuard — Chuột và bàn phím đang được quản lý bởi giáo viên"
+    $lblFooter.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+    $lblFooter.BackColor = [System.Drawing.Color]::FromArgb(9, 13, 22)
+    $lblFooter.ForeColor = [System.Drawing.Color]::FromArgb(86, 94, 107)
     $lblFooter.AutoSize = $false
     $lblFooter.Width = [Math]::Min(620, $cardW - 40)
     $lblFooter.Height = 36
@@ -667,6 +667,27 @@ while ($true) {
                                 [WinGuardSecurity]::UninstallHook() | Out-Null
                                 [WinGuardSecurity]::SetTaskMgrDisabled($false) | Out-Null
                                 Start-Process "shutdown.exe" -ArgumentList "/r /t 0 /f" -NoNewWindow
+                            }
+                            "WAKE_ON_LAN" {
+                                try {
+                                    $udp = New-Object System.Net.Sockets.UdpClient
+                                    $udp.EnableBroadcast = $true
+                                    foreach ($m in $payload.macs) {
+                                        $hex = ($m -replace '[^0-9a-fA-F]','')
+                                        if ($hex.Length -eq 12) {
+                                            $macBytes = New-Object byte[] 6
+                                            for ($i=0; $i -lt 6; $i++) { $macBytes[$i] = [Convert]::ToByte($hex.Substring($i*2,2), 16) }
+                                            $packet = New-Object byte[] 102
+                                            for ($i=0; $i -lt 6; $i++) { $packet[$i] = 0xFF }
+                                            for ($i=1; $i -le 16; $i++) { [Array]::Copy($macBytes, 0, $packet, $i*6, 6) }
+                                            foreach ($ip in @("255.255.255.255","192.168.1.255","192.168.0.255")) {
+                                                $udp.Send($packet, $packet.Length, $ip, 9) | Out-Null
+                                                $udp.Send($packet, $packet.Length, $ip, 7) | Out-Null
+                                            }
+                                        }
+                                    }
+                                    $udp.Close()
+                                } catch {}
                             }
                             "EXEC_CMD" {
                                 if ($payload.cmd) {

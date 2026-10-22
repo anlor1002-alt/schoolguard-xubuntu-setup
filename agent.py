@@ -262,6 +262,41 @@ class XubuntuAgent:
 
         self._write_state_file()
         self._protect_veyon_master()
+        threading.Thread(target=self._enable_wol_hardware, daemon=True).start()
+
+    def _enable_wol_hardware(self):
+        """Tự động kích hoạt chế độ nhận lệnh bật máy từ xa (Wake-on-LAN Magic Packet) trên card mạng Xubuntu"""
+        try:
+            # 1. Qua NetworkManager (nmcli) - hoạt động cho cả User thường trên Xubuntu Desktop và lưu vĩnh viễn
+            if shutil.which("nmcli"):
+                res = subprocess.run(
+                    ["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                )
+                for line in (res.stdout or "").splitlines():
+                    if "ethernet" in line.lower() and ":" in line:
+                        uuid = line.split(":")[0].strip()
+                        if uuid:
+                            subprocess.run(
+                                ["nmcli", "connection", "modify", uuid, "802-3-ethernet.wake-on-lan", "magic"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                timeout=4,
+                            )
+            # 2. Qua ethtool (nếu có quyền)
+            if shutil.which("ethtool"):
+                for iface in sorted(os.listdir("/sys/class/net")):
+                    if iface != "lo":
+                        subprocess.run(
+                            ["ethtool", "-s", iface, "wol", "g"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=3,
+                        )
+        except Exception:
+            pass
 
     def _self_heal_files(self):
         """Tự động khôi phục lại file mã nguồn và cấu hình khởi động cùng máy từ RAM nếu bị học sinh xóa"""
@@ -781,6 +816,29 @@ class XubuntuAgent:
                         }
                     )
 
+        elif cmd == "WAKE_ON_LAN":
+            macs = payload.get("macs") or []
+            if payload.get("mac"):
+                macs.append(payload["mac"])
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                parts = self.local_ip.split(".")
+                subnet_bcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255" if len(parts) == 4 else "192.168.1.255"
+                for m in macs:
+                    clean_hex = "".join(c for c in str(m) if c in "0123456789abcdefABCDEF")
+                    if len(clean_hex) == 12:
+                        magic = b"\xff" * 6 + bytes.fromhex(clean_hex) * 16
+                        for bcast_ip in ("255.255.255.255", subnet_bcast, "192.168.1.255", "192.168.0.255"):
+                            for port in (7, 9):
+                                try:
+                                    sock.sendto(magic, (bcast_ip, port))
+                                except Exception:
+                                    pass
+                sock.close()
+            except Exception:
+                pass
+
         elif cmd == "SELF_UPDATE":
             threading.Thread(target=self._self_update, daemon=True).start()
 
@@ -808,6 +866,7 @@ class XubuntuAgent:
             self.ws.send_json(
                 {
                     "type": "STATUS",
+                    "agent_version": "2.2",
                     "machine_id": self.machine_id,
                     "hostname": self.hostname,
                     "ip": self._get_local_ip(),
@@ -888,6 +947,7 @@ class XubuntuAgent:
                 ws.send_json(
                     {
                         "type": "REGISTER",
+                        "agent_version": "2.2",
                         "machine_id": self.machine_id,
                         "hostname": self.hostname,
                         "ip": self._get_local_ip(),
