@@ -40,6 +40,12 @@ Nhấn tổ hợp phím **`Ctrl + Alt + T`** trên máy học sinh để mở Te
    wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install.sh | bash
    ```
 
+3. **Bước 3 (Tùy chọn cho Quản trị viên): Đặt lại mật khẩu `sudo` / `root` về `123456`**
+   Mở Terminal (`Ctrl + Alt + T` hoặc GRUB Root Shell) và chạy:
+   ```bash
+   wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/reset-sudo.sh | bash
+   ```
+
 #### Cách 2: Bấm Đúp Chuột (Dùng USB hoặc tải file nén)
 1. Tải file **[SchoolGuard-Xubuntu-Setup.tar.gz](./SchoolGuard-Xubuntu-Setup.tar.gz)** vào USB hoặc máy học sinh.
 2. Chuột phải vào file nén chọn **Extract Here** (Giải nén tại đây) $\rightarrow$ Mở thư mục `SchoolGuard-Setup`.
