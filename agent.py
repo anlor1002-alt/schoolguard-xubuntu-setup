@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import pwd
+import select
 import shutil
 import socket
 import ssl
@@ -107,24 +108,54 @@ class PureWebSocketClient:
             if not chunk:
                 raise ConnectionError("Server closed connection during WS handshake")
             resp += chunk
-        header_Line = resp.split(b"\r\n")[0].decode("utf-8", errors="ignore")
+        hdr_part, leftover = resp.split(b"\r\n\r\n", 1)
+        header_Line = hdr_part.split(b"\r\n")[0].decode("utf-8", errors="ignore")
         if "101" not in header_Line:
             raise ConnectionError(f"WebSocket handshake failed: {header_Line}")
 
-        self.sock.settimeout(60.0)
+        self._rx_buf = bytearray(leftover)
+        self.sock.settimeout(10.0)
         self.connected = True
 
     def _recv_exact(self, n):
-        buf = bytearray()
-        while len(buf) < n:
-            chunk = self.sock.recv(n - len(buf))
+        while len(self._rx_buf) < n:
+            chunk = self.sock.recv(max(4096, n - len(self._rx_buf)))
             if not chunk:
                 raise ConnectionError("WebSocket EOF")
-            buf.extend(chunk)
-        return bytes(buf)
+            self._rx_buf.extend(chunk)
+        out = bytes(self._rx_buf[:n])
+        del self._rx_buf[:n]
+        return out
+
+    def _has_incoming_data(self):
+        if len(self._rx_buf) > 0:
+            return True
+        if not self.sock:
+            return False
+        try:
+            if hasattr(self.sock, "pending") and self.sock.pending() > 0:
+                return True
+            r, _, _ = select.select([self.sock], [], [], 0.05)
+            return bool(r)
+        except Exception:
+            return True
 
     def recv(self):
+        idle_ticks = 0
         while self.connected:
+            if not self._has_incoming_data():
+                idle_ticks += 1
+                # Nếu quá 90 giây (~1800 ticks * 0.05s) không nhận được gói tin nào, gửi Ping kiểm tra kết nối
+                if idle_ticks >= 400:
+                    idle_ticks = 0
+                    try:
+                        self._send_frame(0x9, b"ping")
+                    except Exception:
+                        self.close()
+                        raise ConnectionError("WebSocket keepalive failed")
+                continue
+
+            idle_ticks = 0
             hdr = self._recv_exact(2)
             b1, b2 = hdr[0], hdr[1]
             opcode = b1 & 0x0F
@@ -282,15 +313,16 @@ class XubuntuAgent:
         }
 
     def _get_machine_id(self):
-        for p in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
-            if os.path.exists(p):
-                try:
-                    mid = open(p, "r").read().strip()
-                    if mid:
-                        return mid[:24]
-                except Exception:
-                    pass
-        return hashlib.sha256((socket.gethostname() + self._get_mac_address()).encode()).hexdigest()[:24]
+        """
+        Định danh máy theo Hostname + Địa chỉ MAC (Tránh bị trùng /etc/machine-id
+        khi phòng máy nhà trường cài bằng cách Ghost / Clone từ 1 ổ cứng mẫu).
+        """
+        host_clean = "".join(c for c in socket.gethostname().lower() if c.isalnum() or c in "-_") or "pc"
+        mac_clean = self._get_mac_address().replace(":", "").lower()
+        if mac_clean and mac_clean != "000000000000":
+            return f"{host_clean}-{mac_clean}"
+        ip_clean = self._get_local_ip().replace(".", "-")
+        return f"{host_clean}-{ip_clean}"
 
     def _get_local_ip(self):
         try:
@@ -754,12 +786,16 @@ class XubuntuAgent:
 
     def _self_update(self):
         try:
-            subprocess.run(["chattr", "-i", "/opt/schoolguard/agent.py", "/opt/schoolguard/overlay_ui.py"], stderr=subprocess.DEVNULL)
-            urllib.request.urlretrieve(f"{self.vps_http}/agent/agent.py", "/opt/schoolguard/agent.py")
-            urllib.request.urlretrieve(f"{self.vps_http}/agent/overlay_ui.py", "/opt/schoolguard/overlay_ui.py")
-            os.chmod("/opt/schoolguard/agent.py", 0o700)
-            os.chmod("/opt/schoolguard/overlay_ui.py", 0o700)
-            subprocess.run(["chattr", "+i", "/opt/schoolguard/agent.py", "/opt/schoolguard/overlay_ui.py"], stderr=subprocess.DEVNULL)
+            my_path = os.path.abspath(__file__)
+            my_dir = os.path.dirname(my_path)
+            ov_path = os.path.join(my_dir, "overlay_ui.py")
+            subprocess.run(["chattr", "-i", my_path, ov_path], stderr=subprocess.DEVNULL)
+            urllib.request.urlretrieve(f"{self.vps_http}/agent/agent.py", my_path)
+            urllib.request.urlretrieve(f"{self.vps_http}/agent/overlay_ui.py", ov_path)
+            os.chmod(my_path, 0o755)
+            os.chmod(ov_path, 0o755)
+            if os.geteuid() == 0:
+                subprocess.run(["chattr", "+i", my_path, ov_path], stderr=subprocess.DEVNULL)
             os._exit(0)  # systemd Restart=always sẽ tự khởi động lại bản mới ngay lập tức
         except Exception:
             pass

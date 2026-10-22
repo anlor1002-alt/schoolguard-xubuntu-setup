@@ -101,6 +101,7 @@ AUTOSTART_DIR="${HOME}/.config/autostart"
 
 echo "[*] Đang cài đặt nhanh chế độ KHÔNG CẦN MẬT KHẨU SUDO..."
 download_or_copy_files "${USER_INSTALL_DIR}"
+pkill -f ".schoolguard/agent.py" 2>/dev/null || true
 
 # 1. Đăng ký systemd --user (Tự động bật lại trong 1 giây nếu bị tắt)
 mkdir -p "${USER_SYSTEMD_DIR}"
