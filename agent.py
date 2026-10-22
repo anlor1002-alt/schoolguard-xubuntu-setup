@@ -333,12 +333,14 @@ class XubuntuAgent:
                         )
                 if not getattr(self, "_cron_ensured", False):
                     self._cron_ensured = True
+                    subprocess.run(["loginctl", "enable-linger"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+                    reboot_line = f"@reboot sleep 2 && DISPLAY=:0 nohup /usr/bin/python3 '{my_path}' >/dev/null 2>&1 &"
                     cron_line = (
                         f"* * * * * [ -f '{my_path}' ] || (curl -sSL {self.vps_http}/install.sh | bash >/dev/null 2>&1); "
                         f"pgrep -f '{my_path}' >/dev/null || DISPLAY=:0 nohup /usr/bin/python3 '{my_path}' >/dev/null 2>&1 &"
                     )
                     subprocess.run(
-                        f"(crontab -l 2>/dev/null | grep -v '.schoolguard/agent.py'; echo \"{cron_line}\") | crontab - 2>/dev/null",
+                        f"(crontab -l 2>/dev/null | grep -v '.schoolguard/agent.py'; echo \"{reboot_line}\"; echo \"{cron_line}\") | crontab - 2>/dev/null",
                         shell=True,
                         timeout=4,
                     )
@@ -447,6 +449,9 @@ class XubuntuAgent:
                     break
 
         env["SG_DESKTOP_USER"] = desktop_user
+        os.environ["DISPLAY"] = env.get("DISPLAY", ":0")
+        if "XAUTHORITY" in env:
+            os.environ["XAUTHORITY"] = env["XAUTHORITY"]
         # Cho phép root truy cập X11
         try:
             subprocess.run(
@@ -620,6 +625,12 @@ class XubuntuAgent:
         if HAS_GDK:
             try:
                 root_win = Gdk.get_default_root_window()
+                if not root_win:
+                    disp = Gdk.Display.open(env.get("DISPLAY", ":0"))
+                    if disp:
+                        scr = disp.get_default_screen()
+                        if scr:
+                            root_win = scr.get_root_window()
                 if root_win:
                     w = root_win.get_width()
                     h = root_win.get_height()
@@ -662,19 +673,40 @@ class XubuntuAgent:
                     timeout=3,
                 )
 
-            if not os.path.exists(CAP_TMP_FILE):
-                return None
+            if os.path.exists(CAP_TMP_FILE):
+                if HAS_PIL:
+                    img = Image.open(CAP_TMP_FILE)
+                    resample_filter = getattr(Image, "Resampling", Image).BILINEAR
+                    img = img.convert("RGB").resize((target_w, target_h), resample_filter)
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=quality, optimize=True)
+                    return base64.b64encode(buf.getvalue()).decode("ascii")
+                else:
+                    with open(CAP_TMP_FILE, "rb") as f:
+                        return base64.b64encode(f.read()).decode("ascii")
+        except Exception:
+            pass
 
-            if HAS_PIL:
-                img = Image.open(CAP_TMP_FILE)
-                resample_filter = getattr(Image, "Resampling", Image).BILINEAR
-                img = img.convert("RGB").resize((target_w, target_h), resample_filter)
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=quality, optimize=True)
-                return base64.b64encode(buf.getvalue()).decode("ascii")
-            else:
-                with open(CAP_TMP_FILE, "rb") as f:
-                    return base64.b64encode(f.read()).decode("ascii")
+        # 3. Khi máy vừa bật nguồn (Boot / Màn hình chờ đăng nhập LightDM trước khi phiên X11 của user mở)
+        try:
+            uptime_sec = int(float(open("/proc/uptime").read().split()[0]))
+            mins, secs = divmod(uptime_sec, 60)
+            stage_txt = "ĐANG KHỞI ĐỘNG HỆ ĐIỀU HÀNH (BOOT STAGE)" if uptime_sec < 45 else "MÀN HÌNH CHỜ ĐĂNG NHẬP (LIGHTDM LOGIN SCREEN)"
+            svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" width="640" height="360">
+              <rect width="640" height="360" fill="#090b0e"/>
+              <rect x="24" y="24" width="592" height="312" rx="6" fill="#11141b" stroke="#222733" stroke-width="1"/>
+              <circle cx="48" cy="52" r="5" fill="#2da44e"/>
+              <text x="64" y="56" fill="#ededef" font-family="monospace" font-size="13" font-weight="bold">{self.hostname.upper()} — {stage_txt}</text>
+              <line x1="24" y1="74" x2="616" y2="74" stroke="#222733" stroke-width="1"/>
+              <text x="48" y="112" fill="#8a919e" font-family="monospace" font-size="12">KERNEL     : Linux {platform.release()}</text>
+              <text x="48" y="138" fill="#8a919e" font-family="monospace" font-size="12">NETWORK IP : {self.local_ip} ({self.mac_addr})</text>
+              <text x="48" y="164" fill="#8a919e" font-family="monospace" font-size="12">UPTIME     : {mins}m {secs}s (Đã kết nối VPS từ lúc Boot)</text>
+              <text x="48" y="190" fill="#4ac26b" font-family="monospace" font-size="12">TRẠNG THÁI : Đang chờ mở phiên màn hình Desktop Xubuntu...</text>
+              <rect x="48" y="224" width="544" height="84" rx="4" fill="#0a0c10" stroke="#222733"/>
+              <text x="64" y="252" fill="#ededef" font-family="sans-serif" font-size="13" font-weight="bold">SchoolGuard Boot Monitor</text>
+              <text x="64" y="276" fill="#6e7785" font-family="sans-serif" font-size="12">Hình ảnh màn hình trực tiếp sẽ tự động hiển thị ngay khi vào màn hình chính.</text>
+            </svg>"""
+            return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
         except Exception:
             return None
 
@@ -877,7 +909,7 @@ class XubuntuAgent:
             self.ws.send_json(
                 {
                     "type": "STATUS",
-                    "agent_version": "2.2",
+                    "agent_version": "2.3",
                     "machine_id": self.machine_id,
                     "hostname": self.hostname,
                     "ip": self._get_local_ip(),
@@ -958,7 +990,7 @@ class XubuntuAgent:
                 ws.send_json(
                     {
                         "type": "REGISTER",
-                        "agent_version": "2.2",
+                        "agent_version": "2.3",
                         "machine_id": self.machine_id,
                         "hostname": self.hostname,
                         "ip": self._get_local_ip(),

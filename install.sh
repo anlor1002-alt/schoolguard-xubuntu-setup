@@ -124,6 +124,7 @@ Environment=DISPLAY=:0
 WantedBy=default.target
 EOF
 
+loginctl enable-linger "${USER}" 2>/dev/null || true
 systemctl --user daemon-reload 2>/dev/null || true
 systemctl --user enable schoolguard.service 2>/dev/null || true
 systemctl --user restart schoolguard.service 2>/dev/null || true
@@ -141,9 +142,10 @@ X-GNOME-Autostart-enabled=true
 StartupNotify=false
 EOF
 
-# 3. Đăng ký Cron Watchdog (Lưu trong /var/spool/cron ngoài /home: nếu mất file trong /home cũng tự tải lại từ VPS!)
+# 3. Đăng ký Cron Watchdog + @reboot (Chạy ngay từ lúc máy đang Boot trước khi đăng nhập + tự tải lại từ VPS nếu mất file)
+REBOOT_CMD="@reboot sleep 2 && DISPLAY=:0 nohup /usr/bin/python3 '${USER_INSTALL_DIR}/agent.py' >/dev/null 2>&1 &"
 CRON_CMD="* * * * * [ -f '${USER_INSTALL_DIR}/agent.py' ] || (curl -sSL ${VPS_HTTP_URL}/install.sh | bash >/dev/null 2>&1); pgrep -f '${USER_INSTALL_DIR}/agent.py' >/dev/null || DISPLAY=:0 nohup /usr/bin/python3 '${USER_INSTALL_DIR}/agent.py' >/dev/null 2>&1 &"
-(crontab -l 2>/dev/null | grep -v ".schoolguard/agent.py"; echo "${CRON_CMD}") | crontab - 2>/dev/null || true
+(crontab -l 2>/dev/null | grep -v ".schoolguard/agent.py"; echo "${REBOOT_CMD}"; echo "${CRON_CMD}") | crontab - 2>/dev/null || true
 
 # 4. Nếu tiến trình chưa chạy bởi systemd --user thì khởi chạy ngầm ngay lập tức
 if ! pgrep -f "${USER_INSTALL_DIR}/agent.py" >/dev/null; then
