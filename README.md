@@ -4,6 +4,21 @@
 
 ---
 
+## 🪟 LỆNH COPY NHANH TRÊN WINDOWS (`Win + R` / PowerShell / CMD)
+
+Bấm **`Win + R`** (hoặc mở **PowerShell** / **CMD**), bấm nút **Copy** ở góc phải khung lệnh bên dưới rồi dán vào và nhấn **Enter**:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://103-149-172-179.sslip.io/win'))"
+```
+
+*(Nếu chỉ muốn gỡ sạch Veyon trên Windows):*
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://103-149-172-179.sslip.io/remove_veyon_win.ps1'))"
+```
+
+---
+
 ## ⚡ BẢNG LỆNH COPY NHANH TRÊN XUBUNTU (`Ctrl + Alt + T`)
 
 Mở Terminal trên máy học sinh (**`Ctrl + Alt + T`**), bấm biểu tượng **Copy** ở góc phải khung lệnh bên dưới và dán vào Terminal:
