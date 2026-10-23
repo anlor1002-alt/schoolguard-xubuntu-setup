@@ -6,7 +6,7 @@
 $ErrorActionPreference = "SilentlyContinue"
 
 $createdNew = $false
-$Global:SingleInstanceMutex = New-Object System.Threading.Mutex($true, "Local\SchoolGuardWindowsAgentMutex2026", [ref]$createdNew)
+$Global:SingleInstanceMutex = New-Object System.Threading.Mutex($true, "Local\SchoolGuardWindowsAgentMutexV2", [ref]$createdNew)
 if (-not $createdNew) {
     exit 0
 }

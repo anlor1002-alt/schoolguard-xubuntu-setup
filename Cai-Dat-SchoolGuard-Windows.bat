@@ -76,8 +76,8 @@ netsh advfirewall firewall add rule name="SchoolGuard Pro Agent Outbound" dir=ou
 echo [*] Khoi dong SchoolGuard Pro Agent...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ps = Get-CimInstance Win32_Process; foreach ($p in $ps) { if ($p.ProcessId -ne $PID -and $p.Name -eq 'powershell.exe' -and $p.CommandLine -match 'agent_win\.ps1') { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } }" >nul 2>&1
 
-:: Khoi chay agent ngay lap tuc trong nen (dung ca Start-Process Hidden va wscript de dam bao 100%)
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"!INSTALL_DIR!\agent_win.ps1\"' -WindowStyle Hidden" >nul 2>&1
+:: Khoi chay agent ngay lap tuc trong nen (dung WMI Win32_Process va wscript de dam bao 100% doc lap)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'wscript.exe \"!INSTALL_DIR!\run_hidden.vbs\"' }" >nul 2>&1
 start "" wscript.exe "!INSTALL_DIR!\run_hidden.vbs" >nul 2>&1
 
 powershell.exe -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
