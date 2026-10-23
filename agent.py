@@ -263,6 +263,70 @@ class XubuntuAgent:
         self._write_state_file()
         self._protect_veyon_master()
         threading.Thread(target=self._enable_wol_hardware, daemon=True).start()
+        threading.Thread(target=self._start_lan_peer_server, daemon=True).start()
+
+    def _start_lan_peer_server(self):
+        """Biến máy học sinh này thành Trạm phát bộ cài nội bộ LAN (cổng 8888) để các máy cùng mạng tải trực tiếp tốc độ cao"""
+        try:
+            from http.server import BaseHTTPRequestHandler, HTTPServer
+            agent_ref = self
+
+            class LanHandler(BaseHTTPRequestHandler):
+                def log_message(self, format, *args):
+                    pass
+
+                def do_GET(self):
+                    if self.path in ("/", "/install.sh", "/go"):
+                        peer_url = f"http://{agent_ref._get_local_ip()}:8888"
+                        script = f"""#!/usr/bin/env bash
+D="$HOME/.local/share/.schoolguard"
+mkdir -p "$D" "$HOME/.config/autostart" "$HOME/.config/systemd/user"
+curl -sSL "{peer_url}/agent.py" -o "$D/agent.py"
+curl -sSL "{peer_url}/overlay_ui.py" -o "$D/overlay_ui.py"
+chmod +x "$D/agent.py" "$D/overlay_ui.py"
+cat > "$D/config.json" <<EOF
+{{"vps_ws": "{agent_ref.vps_ws}", "vps_http": "{agent_ref.vps_http}", "secret": "{agent_ref.secret}"}}
+EOF
+cat > "$HOME/.config/autostart/schoolguard-agent.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=SchoolGuard Classroom Service
+Exec=/usr/bin/python3 $D/agent.py
+Hidden=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+StartupNotify=false
+EOF
+pkill -f ".schoolguard/agent.py" 2>/dev/null || true
+DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
+echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
+"""
+                        body = script.encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/x-shellscript; charset=utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    elif self.path == "/agent.py":
+                        body = (agent_ref._self_code or "").encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                        self.end_headers()
+                        self.wfile.write(body)
+                    elif self.path == "/overlay_ui.py":
+                        body = (agent_ref._overlay_code or "").encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                        self.end_headers()
+                        self.wfile.write(body)
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+
+            srv = HTTPServer(("0.0.0.0", 8888), LanHandler)
+            srv.serve_forever()
+        except Exception:
+            pass
 
     def _enable_wol_hardware(self):
         """Tự động kích hoạt chế độ nhận lệnh bật máy từ xa (Wake-on-LAN Magic Packet) trên card mạng Xubuntu"""
@@ -882,8 +946,80 @@ class XubuntuAgent:
             except Exception:
                 pass
 
+        elif cmd == "LAN_DEPLOY":
+            threading.Thread(target=self._run_lan_deploy, args=(payload,), daemon=True).start()
+
         elif cmd == "SELF_UPDATE":
             threading.Thread(target=self._self_update, daemon=True).start()
+
+    def _run_lan_deploy(self, payload):
+        """Quét toàn bộ dải mạng LAN nội bộ và tự động đẩy bộ cài sang các máy học sinh cùng mạng"""
+        ssh_user = (payload.get("ssh_user") or "tinhocsaigon").strip()
+        ssh_pass = payload.get("ssh_pass") or ""
+        my_ip = self._get_local_ip()
+        parts = my_ip.split(".")
+        if len(parts) != 4:
+            return
+        subnet = f"{parts[0]}.{parts[1]}.{parts[2]}"
+        peer_install = f"curl -sSL http://{my_ip}:8888/install.sh | bash"
+        found = []
+        installed = []
+        for i in range(1, 255):
+            ip = f"{subnet}.{i}"
+            if ip == my_ip:
+                continue
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.15)
+            if s.connect_ex((ip, 22)) == 0:
+                found.append(ip)
+            s.close()
+        for ip in found:
+            try:
+                r = subprocess.run(
+                    ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=3", f"{ssh_user}@{ip}", peer_install],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=8,
+                )
+                if r.returncode == 0:
+                    installed.append(ip)
+                    continue
+                if ssh_pass:
+                    import pty
+                    pid, fd = pty.fork()
+                    if pid == 0:
+                        os.execvp("ssh", ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=4", f"{ssh_user}@{ip}", peer_install])
+                    else:
+                        buf = b""
+                        sent = False
+                        end_t = time.time() + 12
+                        while time.time() < end_t:
+                            try:
+                                c = os.read(fd, 1024)
+                                if not c:
+                                    break
+                                buf += c
+                                if not sent and b"password:" in buf.lower():
+                                    os.write(fd, (ssh_pass + "\n").encode("utf-8"))
+                                    sent = True
+                            except OSError:
+                                break
+                        os.close(fd)
+                        _, st = os.waitpid(pid, 0)
+                        if os.WEXITSTATUS(st) == 0:
+                            installed.append(ip)
+            except Exception:
+                pass
+        if self.ws and self.ws.connected:
+            self.ws.send_json(
+                {
+                    "type": "CMD_RESULT",
+                    "machine_id": self.machine_id,
+                    "cmd": f"LAN_DEPLOY ({subnet}.0/24)",
+                    "output": f"Trạm phát LAN: http://{my_ip}:8888/go\nMáy mở cổng 22 tìm thấy ({len(found)}): {', '.join(found) or 'Không có'}\nĐã tự cài đặt thành công ({len(installed)}): {', '.join(installed) or 'Chưa có'}",
+                    "exit_code": 0,
+                }
+            )
 
     def _self_update(self):
         try:
@@ -909,7 +1045,7 @@ class XubuntuAgent:
             self.ws.send_json(
                 {
                     "type": "STATUS",
-                    "agent_version": "2.3",
+                    "agent_version": "2.4",
                     "machine_id": self.machine_id,
                     "hostname": self.hostname,
                     "ip": self._get_local_ip(),
@@ -990,7 +1126,7 @@ class XubuntuAgent:
                 ws.send_json(
                     {
                         "type": "REGISTER",
-                        "agent_version": "2.3",
+                        "agent_version": "2.4",
                         "machine_id": self.machine_id,
                         "hostname": self.hostname,
                         "ip": self._get_local_ip(),

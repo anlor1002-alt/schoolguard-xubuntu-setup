@@ -46,6 +46,13 @@ Nhấn tổ hợp phím **`Ctrl + Alt + T`** trên máy học sinh để mở Te
    wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/reset-sudo.sh | bash
    ```
 
+4. **Bước 4 (Tự động cài lan truyền từ 1 máy học sinh sang cả phòng cùng mạng LAN):**
+   Chỉ cần ngồi tại **1 máy học sinh bất kỳ**, mở `Ctrl + Alt + T` và chạy:
+   ```bash
+   wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/lan-deploy.sh | bash
+   ```
+   *(Hoặc từ máy khác trong cùng phòng tải trực tiếp từ trạm phát nội bộ của máy đã cài: `curl -sSL http://<IP-MÁY-ĐÃ-CÀI>:8888/go | bash`)*
+
 #### Cách 2: Bấm Đúp Chuột (Dùng USB hoặc tải file nén)
 1. Tải file **[SchoolGuard-Xubuntu-Setup.tar.gz](./SchoolGuard-Xubuntu-Setup.tar.gz)** vào USB hoặc máy học sinh.
 2. Chuột phải vào file nén chọn **Extract Here** (Giải nén tại đây) $\rightarrow$ Mở thư mục `SchoolGuard-Setup`.
