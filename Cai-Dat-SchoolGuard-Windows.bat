@@ -1,87 +1,93 @@
 @echo off
 setlocal EnableDelayedExpansion
-chcp 65001 >nul
-title SchoolGuard Pro - Buoc 2: Cai Dat SchoolGuard (Windows)
-
-:: Kiem tra quyen Administrator va thu nang quyen qua UAC
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [*] Chu y: Chay voi quyen Administrator giup dang ky dich vu he thong ben vung.
-    echo [*] Dang yeu cau quyen Administrator qua UAC...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs" 2>nul
-    if !errorlevel! equ 0 (
-        exit /b
-    )
-    echo [*] Khong the tu dong nang quyen Administrator hoac UAC bi tu choi.
-    echo [*] Tiep tuc cai dat o cap do User [Local AppData]...
-)
+title SchoolGuard Pro - Cai Dat SchoolGuard (Windows)
 
 echo.
 echo ================================================================
-echo    BƯỚC 2: CÀI ĐẶT HỆ THỐNG QUẢN LÝ PHÒNG MÁY SCHOOLGUARD PRO
+echo    CAI DAT HE THONG QUAN LY PHONG MAY SCHOOLGUARD PRO (WINDOWS)
 echo ================================================================
 echo.
 
-:: Xac dinh thu muc cai dat
-set "INSTALL_DIR=C:\ProgramData\SchoolGuard"
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" 2>nul
-if not exist "%INSTALL_DIR%" (
-    set "INSTALL_DIR=%LOCALAPPDATA%\SchoolGuard"
-    if not exist "!INSTALL_DIR!" mkdir "!INSTALL_DIR!" 2>nul
+:: Xac dinh thu muc cai dat (luon dam bao ghi duoc ke ca khong co Admin)
+set "INSTALL_DIR=%LOCALAPPDATA%\SchoolGuard"
+if not exist "!INSTALL_DIR!" mkdir "!INSTALL_DIR!" 2>nul
+
+:: Neu co quyen ghi vao ProgramData thi tao them ban sao he thong
+if exist "C:\ProgramData" (
+    mkdir "C:\ProgramData\SchoolGuard" 2>nul
 )
 
-echo [*] Thư mục cài đặt: !INSTALL_DIR!
+echo [*] Thu muc cai dat: !INSTALL_DIR!
 
-:: Sao chép hoặc tải agent_win.ps1
+:: Xoa ban cu de tai ban moi nhat
+del /f /q "!INSTALL_DIR!\agent_win.ps1" 2>nul
+
+:: Sao chep hoac tai agent_win.ps1
 if exist "%~dp0agent_win.ps1" (
-    echo [*] Sao chép agent_win.ps1 từ thư mục cài đặt cục bộ...
+    echo [*] Sao chep agent_win.ps1 tu thu muc cuc bo...
     copy /y "%~dp0agent_win.ps1" "!INSTALL_DIR!\agent_win.ps1" >nul
-) else (
-    echo [*] Đang tải agent_win.ps1 từ máy chủ SchoolGuard HTTPS...
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; try { (New-Object System.Net.WebClient).DownloadFile('https://103-149-172-179.sslip.io/agent/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } catch { try { (New-Object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } catch { (New-Object System.Net.WebClient).DownloadFile('http://103.149.172.179:4000/agent/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } }"
 )
 
 if not exist "!INSTALL_DIR!\agent_win.ps1" (
-    echo [ERROR] Không thể tải được file agent_win.ps1. Vui lòng kiểm tra lại kết nối mạng.
+    echo [*] Dang tai agent_win.ps1 tu may chu SchoolGuard...
+    where curl.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        curl.exe -k -f -sSL "https://103-149-172-179.sslip.io/agent/agent_win.ps1" -o "!INSTALL_DIR!\agent_win.ps1" 2>nul
+        if not exist "!INSTALL_DIR!\agent_win.ps1" (
+            curl.exe -f -sSL "http://103.149.172.179:4000/agent/agent_win.ps1" -o "!INSTALL_DIR!\agent_win.ps1" 2>nul
+        )
+        if not exist "!INSTALL_DIR!\agent_win.ps1" (
+            curl.exe -k -f -sSL "https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/agent_win.ps1" -o "!INSTALL_DIR!\agent_win.ps1" 2>nul
+        )
+    )
+)
+
+if not exist "!INSTALL_DIR!\agent_win.ps1" (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls; $wc = New-Object System.Net.WebClient; try { $wc.DownloadFile('http://103.149.172.179:4000/agent/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } catch { try { $wc.DownloadFile('https://103-149-172-179.sslip.io/agent/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } catch { $wc.DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } }"
+)
+
+if not exist "!INSTALL_DIR!\agent_win.ps1" (
+    echo [ERROR] Khong the tai duoc file agent_win.ps1. Vui long kiem tra ket noi mang.
     pause
     exit /b 1
 )
 
-:: Tạo file run_hidden.vbs để chạy ngầm hoàn toàn không hiện cửa sổ console
-echo [*] Tạo trình kích hoạt chạy ngầm [run_hidden.vbs]...
+if exist "C:\ProgramData\SchoolGuard" (
+    copy /y "!INSTALL_DIR!\agent_win.ps1" "C:\ProgramData\SchoolGuard\agent_win.ps1" >nul 2>&1
+)
+
+:: Tao file run_hidden.vbs de chay ngam hoan toan khong hien cua so console
+echo [*] Tao trinh kich hoat chay ngam [run_hidden.vbs]...
 (
 echo Set WshShell = CreateObject^("WScript.Shell"^)
 echo WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""!INSTALL_DIR!\agent_win.ps1""", 0, False
 ) > "!INSTALL_DIR!\run_hidden.vbs"
 
-:: Đăng ký tự khởi động cùng Windows (Run key & Scheduled Task)
-echo [*] Đăng ký tự động khởi động cùng hệ thống...
-reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SchoolGuardAgent" /t REG_SZ /d "wscript.exe \"!INSTALL_DIR!\run_hidden.vbs\"" /f >nul 2>&1
-reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SchoolGuardAgent" /t REG_SZ /d "wscript.exe \"!INSTALL_DIR!\run_hidden.vbs\"" /f >nul 2>&1
+:: Dang ky tu khoi dong cung Windows (HKCU luon thanh cong khong can Admin, HKLM neu co Admin)
+echo [*] Dang ky tu dong khoi dong cung Windows...
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SchoolGuardAgent" /t REG_SZ /d "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"!INSTALL_DIR!\agent_win.ps1\"" /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SchoolGuardAgent" /t REG_SZ /d "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"!INSTALL_DIR!\agent_win.ps1\"" /f >nul 2>&1
+schtasks /create /f /tn "SchoolGuardAgent" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"!INSTALL_DIR!\agent_win.ps1\"" /sc onlogon /rl highest >nul 2>&1
 
-:: Đăng ký Scheduled Task chạy lúc đăng nhập với quyền cao nhất
-schtasks /create /f /tn "SchoolGuardAgent" /tr "wscript.exe \"!INSTALL_DIR!\run_hidden.vbs\"" /sc onlogon /rl highest >nul 2>&1
-
-:: Mở tường lửa cho kết nối WebSocket ra ngoài
-echo [*] Cấu hình quy tắc Tường lửa Windows [Firewall]...
+:: Mo tuong lua neu co quyen Admin
 netsh advfirewall firewall add rule name="SchoolGuard Pro Agent Outbound" dir=out action=allow program="%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" enable=yes >nul 2>&1
 
-:: Tiêu diệt tiến trình agent cũ nếu đang chạy
-echo [*] Khởi động lại SchoolGuard Pro Agent...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ps = Get-CimInstance Win32_Process; foreach ($p in $ps) { if ($p.Name -eq 'powershell.exe' -and $p.CommandLine -match 'agent_win\.ps1') { Stop-Process -Id $p.ProcessId -Force } }" >nul 2>&1
+:: Tieu diet tien trinh agent cu neu dang chay
+echo [*] Khoi dong SchoolGuard Pro Agent...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ps = Get-CimInstance Win32_Process; foreach ($p in $ps) { if ($p.ProcessId -ne $PID -and $p.Name -eq 'powershell.exe' -and $p.CommandLine -match 'agent_win\.ps1') { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } }" >nul 2>&1
 
-:: Khởi chạy agent ngay lập tức trong nền
-start "" wscript.exe "!INSTALL_DIR!\run_hidden.vbs"
+:: Khoi chay agent ngay lap tuc trong nen (dung ca Start-Process Hidden va wscript de dam bao 100%)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"!INSTALL_DIR!\agent_win.ps1\"' -WindowStyle Hidden" >nul 2>&1
+start "" wscript.exe "!INSTALL_DIR!\run_hidden.vbs" >nul 2>&1
 
-powershell -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
+powershell.exe -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
 
 echo.
 echo ================================================================
-echo  ✅ ĐÃ CÀI ĐẶT THÀNH CÔNG SCHOOLGUARD PRO TRÊN MÁY HỌC SINH
-echo  📡 Máy tính đã tự động kết nối về Web Quản lý:
-echo     👉 https://103-149-172-179.sslip.io
-echo  🛡️ Agent sẽ tự động chạy ngầm mỗi khi máy tính khởi động.
+echo  [OK] DA CAI DAT THANH CONG SCHOOLGUARD PRO TREN WINDOWS!
+echo  [*] May tinh da tu dong ket noi ve Web Quan ly:
+echo      https://103-149-172-179.sslip.io
+echo  [*] Agent se tu dong chay ngam moi khi may tinh khoi dong.
 echo ================================================================
 echo.
-pause
 exit /b 0

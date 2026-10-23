@@ -1,11 +1,10 @@
 # ============================================================================
 # SchoolGuard Windows Agent (Zero-Dependency .NET / PowerShell)
-# Chạy ngầm 100% không hiện cửa sổ trên Windows 10/11 (Không cần cài Python)
-# Kết nối trực tiếp về VPS: wss://103-149-172-179.sslip.io/ws/agent
+# Runs 100% hidden in background on Windows 7/10/11 (No Python required)
+# Connects to VPS: wss://103-149-172-179.sslip.io/ws/agent (fallback ws://:4000)
 # ============================================================================
 $ErrorActionPreference = "SilentlyContinue"
 
-# Đảm bảo chỉ chạy duy nhất 1 tiến trình (Chống trùng lặp khi Watchdog kiểm tra mỗi phút)
 $createdNew = $false
 $Global:SingleInstanceMutex = New-Object System.Threading.Mutex($true, "Local\SchoolGuardWindowsAgentMutex2026", [ref]$createdNew)
 if (-not $createdNew) {
@@ -15,14 +14,24 @@ if (-not $createdNew) {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# Nạp C# WinGuardSecurity cho khóa chuột phím, chặn phím tắt cấp thấp và vô hiệu hóa Task Manager
 $csharpCode = @"
 using System;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Security;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
 
 public static class WinGuardSecurity {
+    public static void EnableTls() {
+        try {
+            ServicePointManager.ServerCertificateValidationCallback = new RemoteCertificateValidationCallback(
+                delegate (object s, X509Certificate c, X509Chain ch, SslPolicyErrors e) { return true; }
+            );
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
+        } catch {}
+    }
     public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -96,15 +105,12 @@ public static class WinGuardSecurity {
             bool alt = (hookStruct.flags & 0x20) != 0;
             bool ctrl = (GetAsyncKeyState(0x11) & 0x8000) != 0;
 
-            // Chặn phím Windows: VK_LWIN(0x5B), VK_RWIN(0x5C), VK_APPS(0x5D)
             if (vk == 0x5B || vk == 0x5C || vk == 0x5D) {
                 return (IntPtr)1;
             }
-            // Chặn phím tắt Alt: Alt+Tab (0x09), Alt+Esc (0x1B), Alt+F4 (0x73)
             if (alt && (vk == 0x09 || vk == 0x1B || vk == 0x73)) {
                 return (IntPtr)1;
             }
-            // Chặn Ctrl+Esc (0x1B)
             if (ctrl && vk == 0x1B) {
                 return (IntPtr)1;
             }
@@ -126,29 +132,22 @@ if (-not ([System.Management.Automation.PSTypeName]'WinGuardSecurity').Type) {
     Add-Type -TypeDefinition $csharpCode -Language CSharp
 }
 
-$VPS_WS = "wss://103-149-172-179.sslip.io/ws/agent"
+$VPS_WS_LIST = @(
+    "wss://103-149-172-179.sslip.io/ws/agent",
+    "ws://103.149.172.179:4000/ws/agent"
+)
 $VPS_HTTP = "https://103-149-172-179.sslip.io"
 $SECRET = "schoolguard-xubuntu-secret-2026"
 $INSTALL_DIR = Join-Path $env:LOCALAPPDATA "SchoolGuard"
-
-# Tạo mã định danh máy duy nhất trên Windows (Dựa theo UUID Bo mạch chủ / MAC)
-function Get-MachineId {
-    try {
-        $uuid = (Get-CimInstance Win32_ComputerSystemProduct).UUID
-        if ($uuid -and $uuid -ne "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF") {
-            return ("win-" + $uuid.Replace("-", "").ToLower()).Substring(0, 24)
-        }
-    } catch {}
-    $raw = $env:COMPUTERNAME + "-" + $env:USERNAME
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
-    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
-    return "win-" + ([BitConverter]::ToString($hash).Replace("-", "").ToLower().Substring(0, 20))
-}
 
 function Get-LocalIp {
     try {
         $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch "Loopback" -and $_.IPAddress -notlike "169.*" } | Select-Object -First 1).IPAddress
         if ($ip) { return $ip }
+    } catch {}
+    try {
+        $ip2 = ([System.Net.Dns]::GetHostAddresses($env:COMPUTERNAME) | Where-Object { $_.AddressFamily -eq "InterNetwork" } | Select-Object -First 1).IPAddressToString
+        if ($ip2) { return $ip2 }
     } catch {}
     return "127.0.0.1"
 }
@@ -156,9 +155,24 @@ function Get-LocalIp {
 function Get-MacAddr {
     try {
         $mac = (Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1).MacAddress
-        if ($mac) { return $mac.Replace("-", ":") }
+        if ($mac) { return $mac.Replace("-", ":").ToLower() }
+    } catch {}
+    try {
+        $wmiMac = (Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true } | Select-Object -First 1).MACAddress
+        if ($wmiMac) { return $wmiMac.ToLower() }
     } catch {}
     return "00:00:00:00:00:00"
+}
+
+function Get-MachineId {
+    $hostClean = ($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9_-]', '')
+    if (-not $hostClean) { $hostClean = "winpc" }
+    $macClean = ((Get-MacAddr) -replace '[^a-f0-9]', '')
+    if ($macClean -and $macClean -ne "000000000000") {
+        return "$hostClean-$macClean"
+    }
+    $ipClean = ((Get-LocalIp) -replace '[^0-9]', '-')
+    return "$hostClean-$ipClean"
 }
 
 $MACHINE_ID = Get-MachineId
@@ -167,11 +181,10 @@ $DESKTOP_USER = $env:USERNAME
 $SELF_SCRIPT_PATH = $MyInvocation.MyCommand.Path
 $SELF_CODE = if ($SELF_SCRIPT_PATH -and (Test-Path $SELF_SCRIPT_PATH)) { [System.IO.File]::ReadAllText($SELF_SCRIPT_PATH) } else { "" }
 
-# Bảng trạng thái đồng bộ giữa luồng WebSocket và luồng Giao diện Khóa/Trình chiếu
 $Global:SharedState = [hashtable]::Synchronized(@{
-    Mode          = "normal"     # "normal" | "lock" | "broadcast"
+    Mode          = "normal"
     MachineName   = $HOSTNAME
-    LockMessage   = "Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên."
+    LockMessage   = "Vui long trat tu va chu y theo doi huong dan cua Giao vien."
     LockInput     = $true
     LiveFocus     = $false
     FrameBytes    = $null
@@ -181,8 +194,7 @@ $Global:SharedState = [hashtable]::Synchronized(@{
 })
 
 # ============================================================================
-# Luồng Giao diện Khóa Màn Hình & Trình Chiếu Toàn Màn Hình (STA UI Thread)
-# Hỗ trợ Đa màn hình (Multi-Monitor VirtualScreen) và Giao diện Hiện đại
+# Fullscreen Lock & Broadcast UI Thread (STA Runspace)
 # ============================================================================
 $uiRunspace = [runspacefactory]::CreateRunspace()
 $uiRunspace.ApartmentState = "STA"
@@ -202,14 +214,12 @@ $uiPowershell.Runspace = $uiRunspace
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
     $form.TopMost = $true
     $form.ShowInTaskbar = $false
-    $form.BackColor = [System.Drawing.Color]::FromArgb(9, 13, 22)
+    $form.BackColor = [System.Drawing.Color]::FromArgb(9, 11, 14)
     $form.KeyPreview = $true
 
-    # Phủ toàn bộ màn hình thực tế (kể cả hệ thống có 2 hoặc nhiều màn hình nối dài)
     $vScreen = [System.Windows.Forms.SystemInformation]::VirtualScreen
     $form.Bounds = $vScreen
 
-    # Chặn đóng cửa sổ (Alt+F4) và mọi phím bấm
     $form.Add_FormClosing({
         param($s, $e)
         if ($SharedState.Mode -eq "lock" -or $SharedState.Mode -eq "broadcast") {
@@ -222,101 +232,31 @@ $uiPowershell.Runspace = $uiRunspace
         $e.SuppressKeyPress = $true
     })
 
-    # Khung toàn diện che phủ
     $lockPanel = New-Object System.Windows.Forms.Panel
     $lockPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
-    $lockPanel.BackColor = [System.Drawing.Color]::FromArgb(9, 13, 22)
+    $lockPanel.BackColor = [System.Drawing.Color]::FromArgb(9, 11, 14)
 
-    # Căn giữa thẻ hiển thị khóa máy tại màn hình chính (Primary Screen)
     $pri = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $cardW = [Math]::Min(960, $pri.Width - 60)
-    $cardH = 560
+    $cardW = [Math]::Min(900, $pri.Width - 60)
+    $cardH = 520
     $centerX = $pri.Left + [int](($pri.Width - $cardW) / 2) - $vScreen.Left
     $centerY = $pri.Top + [int](($pri.Height - $cardH) / 2) - $vScreen.Top
 
     $centerCard = New-Object System.Windows.Forms.Panel
     $centerCard.Size = New-Object System.Drawing.Size($cardW, $cardH)
     $centerCard.Location = New-Object System.Drawing.Point($centerX, $centerY)
-    $centerCard.BackColor = [System.Drawing.Color]::FromArgb(9, 13, 22)
+    $centerCard.BackColor = [System.Drawing.Color]::FromArgb(9, 11, 14)
     $lockPanel.Controls.Add($centerCard)
 
-    # 1. Huy hiệu Số Máy (Machine Slot Badge)
-    $lblBadge = New-Object System.Windows.Forms.Label
-    $lblBadge.Text = "MÁY HỌC SINH — PHÒNG TIN HỌC"
-    $lblBadge.Font = New-Object System.Drawing.Font("Consolas", 11, [System.Drawing.FontStyle]::Bold)
-    $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(18, 21, 28)
-    $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(155, 163, 176)
-    $lblBadge.AutoSize = $false
-    $lblBadge.Width = 420
-    $lblBadge.Height = 36
-    $lblBadge.Left = [int](($cardW - $lblBadge.Width) / 2)
-    $lblBadge.Top = 0
-    $lblBadge.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-    $centerCard.Controls.Add($lblBadge)
-
-    # 2. Tiêu đề Khóa Máy
-    $lblTitle = New-Object System.Windows.Forms.Label
-    $lblTitle.Text = "Màn hình đang tạm khóa"
-    $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 24, [System.Drawing.FontStyle]::Bold)
-    $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
-    $lblTitle.AutoSize = $false
-    $lblTitle.Width = $cardW
-    $lblTitle.Height = 56
-    $lblTitle.Left = 0
-    $lblTitle.Top = 52
-    $lblTitle.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-    $centerCard.Controls.Add($lblTitle)
-
-    # 3. Thẻ Thông Báo Giáo Viên
-    $msgCard = New-Object System.Windows.Forms.Panel
-    $msgCard.Width = [Math]::Min(800, $cardW - 40)
-    $msgCard.Height = 160
-    $msgCard.Left = [int](($cardW - $msgCard.Width) / 2)
-    $msgCard.Top = 124
-    $msgCard.BackColor = [System.Drawing.Color]::FromArgb(17, 20, 27)
-
-    # Đường viền điểm nhấn đầu thẻ thông báo
-    $accentLine = New-Object System.Windows.Forms.Panel
-    $accentLine.Dock = [System.Windows.Forms.DockStyle]::Left
-    $accentLine.Width = 3
-    $accentLine.BackColor = [System.Drawing.Color]::FromArgb(47, 111, 235)
-    $msgCard.Controls.Add($accentLine)
-
-    $lblMsgHead = New-Object System.Windows.Forms.Label
-    $lblMsgHead.Text = "Thông báo từ giáo viên"
-    $lblMsgHead.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $lblMsgHead.ForeColor = [System.Drawing.Color]::FromArgb(138, 145, 158)
-    $lblMsgHead.AutoSize = $false
-    $lblMsgHead.Width = $msgCard.Width - 40
-    $lblMsgHead.Height = 24
-    $lblMsgHead.Left = 24
-    $lblMsgHead.Top = 18
-    $lblMsgHead.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-    $msgCard.Controls.Add($lblMsgHead)
-
-    $lblMsg = New-Object System.Windows.Forms.Label
-    $lblMsg.Text = $SharedState.LockMessage
-    $lblMsg.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Regular)
-    $lblMsg.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
-    $lblMsg.AutoSize = $false
-    $lblMsg.Width = $msgCard.Width - 48
-    $lblMsg.Height = 100
-    $lblMsg.Left = 24
-    $lblMsg.Top = 48
-    $lblMsg.TextAlign = [System.Drawing.ContentAlignment]::TopLeft
-    $msgCard.Controls.Add($lblMsg)
-    $centerCard.Controls.Add($msgCard)
-
-    # 4. Đồng Hồ Số Điện Tử (Digital Clock Ticker)
     $lblClock = New-Object System.Windows.Forms.Label
     $lblClock.Text = "--:--:--"
-    $lblClock.Font = New-Object System.Drawing.Font("Consolas", 34, [System.Drawing.FontStyle]::Bold)
+    $lblClock.Font = New-Object System.Drawing.Font("Consolas", 38, [System.Drawing.FontStyle]::Bold)
     $lblClock.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
     $lblClock.AutoSize = $false
     $lblClock.Width = $cardW
-    $lblClock.Height = 52
+    $lblClock.Height = 56
     $lblClock.Left = 0
-    $lblClock.Top = 304
+    $lblClock.Top = 10
     $lblClock.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
     $centerCard.Controls.Add($lblClock)
 
@@ -326,27 +266,88 @@ $uiPowershell.Runspace = $uiRunspace
     $lblDate.ForeColor = [System.Drawing.Color]::FromArgb(110, 119, 133)
     $lblDate.AutoSize = $false
     $lblDate.Width = $cardW
-    $lblDate.Height = 28
+    $lblDate.Height = 24
     $lblDate.Left = 0
-    $lblDate.Top = 358
+    $lblDate.Top = 68
     $lblDate.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
     $centerCard.Controls.Add($lblDate)
 
-    # 5. Trạng Thái Hệ Thống
+    $lblBadge = New-Object System.Windows.Forms.Label
+    $lblBadge.Text = "MAY HOC SINH - PHONG TIN HOC"
+    $lblBadge.Font = New-Object System.Drawing.Font("Consolas", 11, [System.Drawing.FontStyle]::Bold)
+    $lblBadge.BackColor = [System.Drawing.Color]::FromArgb(18, 21, 28)
+    $lblBadge.ForeColor = [System.Drawing.Color]::FromArgb(155, 163, 176)
+    $lblBadge.AutoSize = $false
+    $lblBadge.Width = 420
+    $lblBadge.Height = 34
+    $lblBadge.Left = [int](($cardW - $lblBadge.Width) / 2)
+    $lblBadge.Top = 106
+    $lblBadge.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    $centerCard.Controls.Add($lblBadge)
+
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text = "Man hinh dang tam khoa"
+    $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 22, [System.Drawing.FontStyle]::Bold)
+    $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
+    $lblTitle.AutoSize = $false
+    $lblTitle.Width = $cardW
+    $lblTitle.Height = 48
+    $lblTitle.Left = 0
+    $lblTitle.Top = 152
+    $lblTitle.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
+    $centerCard.Controls.Add($lblTitle)
+
+    $msgCard = New-Object System.Windows.Forms.Panel
+    $msgCard.Width = [Math]::Min(780, $cardW - 40)
+    $msgCard.Height = 150
+    $msgCard.Left = [int](($cardW - $msgCard.Width) / 2)
+    $msgCard.Top = 216
+    $msgCard.BackColor = [System.Drawing.Color]::FromArgb(17, 20, 27)
+
+    $accentLine = New-Object System.Windows.Forms.Panel
+    $accentLine.Dock = [System.Windows.Forms.DockStyle]::Left
+    $accentLine.Width = 3
+    $accentLine.BackColor = [System.Drawing.Color]::FromArgb(47, 111, 235)
+    $msgCard.Controls.Add($accentLine)
+
+    $lblMsgHead = New-Object System.Windows.Forms.Label
+    $lblMsgHead.Text = "Thong bao tu giao vien"
+    $lblMsgHead.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $lblMsgHead.ForeColor = [System.Drawing.Color]::FromArgb(138, 145, 158)
+    $lblMsgHead.AutoSize = $false
+    $lblMsgHead.Width = $msgCard.Width - 40
+    $lblMsgHead.Height = 24
+    $lblMsgHead.Left = 24
+    $lblMsgHead.Top = 16
+    $lblMsgHead.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $msgCard.Controls.Add($lblMsgHead)
+
+    $lblMsg = New-Object System.Windows.Forms.Label
+    $lblMsg.Text = $SharedState.LockMessage
+    $lblMsg.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Regular)
+    $lblMsg.ForeColor = [System.Drawing.Color]::FromArgb(237, 237, 239)
+    $lblMsg.AutoSize = $false
+    $lblMsg.Width = $msgCard.Width - 48
+    $lblMsg.Height = 90
+    $lblMsg.Left = 24
+    $lblMsg.Top = 46
+    $lblMsg.TextAlign = [System.Drawing.ContentAlignment]::TopLeft
+    $msgCard.Controls.Add($lblMsg)
+    $centerCard.Controls.Add($msgCard)
+
     $lblFooter = New-Object System.Windows.Forms.Label
-    $lblFooter.Text = "SchoolGuard — Chuột và bàn phím đang được quản lý bởi giáo viên"
+    $lblFooter.Text = "SchoolGuard - Chuot va ban phim dang duoc quan ly boi giao vien"
     $lblFooter.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
-    $lblFooter.BackColor = [System.Drawing.Color]::FromArgb(9, 13, 22)
+    $lblFooter.BackColor = [System.Drawing.Color]::FromArgb(9, 11, 14)
     $lblFooter.ForeColor = [System.Drawing.Color]::FromArgb(86, 94, 107)
     $lblFooter.AutoSize = $false
-    $lblFooter.Width = [Math]::Min(620, $cardW - 40)
-    $lblFooter.Height = 36
-    $lblFooter.Left = [int](($cardW - $lblFooter.Width) / 2)
-    $lblFooter.Top = 415
+    $lblFooter.Width = $cardW
+    $lblFooter.Height = 32
+    $lblFooter.Left = 0
+    $lblFooter.Top = 390
     $lblFooter.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
     $centerCard.Controls.Add($lblFooter)
 
-    # Khung Trình Chiếu Bài Giảng Toàn Màn Hình
     $picBox = New-Object System.Windows.Forms.PictureBox
     $picBox.Dock = [System.Windows.Forms.DockStyle]::Fill
     $picBox.BackColor = [System.Drawing.Color]::Black
@@ -372,7 +373,6 @@ $uiPowershell.Runspace = $uiRunspace
             $form.TopMost = $true
             $form.Activate()
 
-            # Giữ chuột trong màn hình khóa nếu được kích hoạt
             if ($SharedState.LockInput) {
                 $priCenter = New-Object System.Drawing.Point([int]($pri.Left + $pri.Width / 2), [int]($pri.Top + $pri.Height / 2))
                 [System.Windows.Forms.Cursor]::Clip = New-Object System.Drawing.Rectangle($priCenter.X, $priCenter.Y, 1, 1)
@@ -382,11 +382,11 @@ $uiPowershell.Runspace = $uiRunspace
             if ($mode -eq "lock") {
                 $picBox.Visible = $false
                 $lockPanel.Visible = $true
-                $lblBadge.Text = "PHÒNG MÁY TIN HỌC  •  " + $SharedState.MachineName
+                $lblBadge.Text = $SharedState.MachineName + " - PHONG TIN HOC"
                 $lblMsg.Text = $SharedState.LockMessage
                 $now = Get-Date
                 $lblClock.Text = $now.ToString("HH:mm:ss")
-                $lblDate.Text = $now.ToString("dddd, dd/MM/yyyy")
+                $lblDate.Text = $now.ToString("dd/MM/yyyy")
             } else {
                 $lockPanel.Visible = $false
                 $picBox.Visible = $true
@@ -416,9 +416,6 @@ $uiPowershell.Runspace = $uiRunspace
 })
 $uiAsync = $uiPowershell.BeginInvoke()
 
-# ============================================================================
-# Hàm Chụp Màn Hình Windows Siêu Nhanh - Không Rò Rỉ Bộ Nhớ GDI
-# ============================================================================
 function Capture-ScreenBase64 {
     $bmp = $null
     $g = $null
@@ -454,9 +451,6 @@ function Capture-ScreenBase64 {
     }
 }
 
-# ============================================================================
-# Tự Động Bảo Vệ File & Khởi Động Cùng Windows (RAM Self-Healing)
-# ============================================================================
 function Invoke-SelfHeal {
     try {
         if (-not (Test-Path $INSTALL_DIR)) {
@@ -464,18 +458,16 @@ function Invoke-SelfHeal {
         }
         $targetAgent = Join-Path $INSTALL_DIR "agent_win.ps1"
         if ($SELF_CODE -and -not (Test-Path $targetAgent)) {
-            [System.IO.File]::WriteAllText($targetAgent, $SELF_CODE, [System.Text.Encoding]::UTF8)
+            [System.IO.File]::WriteAllText($targetAgent, $SELF_CODE, [System.Text.Encoding]::ASCII)
         }
         $vbsPath = Join-Path $INSTALL_DIR "run_hidden.vbs"
         if (-not (Test-Path $vbsPath)) {
             $vbsContent = "Set ws = CreateObject(""Wscript.Shell"")`r`nws.Run ""powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$targetAgent"""""", 0, False"
             [System.IO.File]::WriteAllText($vbsPath, $vbsContent, [System.Text.Encoding]::ASCII)
         }
-        # Giữ khóa Registry tự chạy khi bật Windows
         $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
         Set-ItemProperty -Path $regPath -Name "SchoolGuardAgent" -Value "wscript.exe `"$vbsPath`"" -Force
 
-        # Giám sát và dập tắt Veyon (Tuyệt đối không tự động bật lại Veyon!)
         if ($Global:SharedState.VeyonStatus -eq "disabled") {
             $rogue = Get-Process -Name "*veyon*" -ErrorAction SilentlyContinue
             if ($rogue) {
@@ -521,20 +513,23 @@ function Send-WsStatus($ws) {
 }
 
 # ============================================================================
-# Vòng Lặp Kết Nối WebSocket Thời Gian Thực Về VPS
+# Real-time WebSocket Loop (Supports TLS 1.2 + Fallback WS :4000)
 # ============================================================================
-[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+[WinGuardSecurity]::EnableTls()
 
+$wsIndex = 0
 while ($true) {
+    $currentWsUrl = $VPS_WS_LIST[$wsIndex % $VPS_WS_LIST.Count]
+    $wsIndex++
+
     $ws = New-Object System.Net.WebSockets.ClientWebSocket
     $ws.Options.SetRequestHeader("X-SchoolGuard-Secret", $SECRET)
     $ws.Options.SetRequestHeader("X-Machine-Id", $MACHINE_ID)
 
     try {
-        $uri = [Uri]$VPS_WS
+        $uri = [Uri]$currentWsUrl
         $ws.ConnectAsync($uri, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
 
-        # Đăng ký máy với VPS
         Send-WsJson $ws @{
             type           = "REGISTER"
             machine_id     = $MACHINE_ID
@@ -592,7 +587,6 @@ while ($true) {
                             "UNLOCK" {
                                 $Global:SharedState.Mode = "normal"
                                 $Global:SharedState.LockInput = $false
-                                # Giải phóng màn hình học sinh: Tiêu diệt triệt để tiến trình khóa của Veyon
                                 Stop-Process -Name "VeyonWorker", "VeyonMaster", "*veyon*" -Force -ErrorAction SilentlyContinue
                                 [WinGuardSecurity]::BlockInput($false) | Out-Null
                                 [WinGuardSecurity]::UninstallHook() | Out-Null
@@ -645,7 +639,7 @@ while ($true) {
                                     Start-Job -ScriptBlock {
                                         param($m)
                                         Add-Type -AssemblyName System.Windows.Forms
-                                        [System.Windows.Forms.MessageBox]::Show($m, "Thông báo từ Giáo viên", 0, 64)
+                                        [System.Windows.Forms.MessageBox]::Show($m, "Thong bao tu Giao vien", 0, 64)
                                     } -ArgumentList $txt | Out-Null
                                 }
                             }
@@ -711,12 +705,12 @@ while ($true) {
             $intervalSec = if ($Global:SharedState.LiveFocus) { 0.45 } else { 2.0 }
             if (($now - $lastScreenTime).TotalSeconds -ge $intervalSec) {
                 $lastScreenTime = $now
-                $imgB64 = Capture-ScreenBase64
-                if ($imgB64) {
+                $b64 = Capture-ScreenBase64
+                if ($b64) {
                     Send-WsJson $ws @{
                         type         = "SCREEN"
                         machine_id   = $MACHINE_ID
-                        image        = $imgB64
+                        image        = $b64
                         mode         = $Global:SharedState.Mode
                         veyon_status = $Global:SharedState.VeyonStatus
                     }
@@ -726,14 +720,14 @@ while ($true) {
             if (($now - $lastHealTime).TotalSeconds -ge 4.0) {
                 $lastHealTime = $now
                 Invoke-SelfHeal
+                Send-WsStatus $ws
             }
         }
     } catch {}
     finally {
-        [WinGuardSecurity]::BlockInput($false) | Out-Null
-        [WinGuardSecurity]::UninstallHook() | Out-Null
-        [WinGuardSecurity]::SetTaskMgrDisabled($false) | Out-Null
         try { $ws.Dispose() } catch {}
-        Start-Sleep -Seconds 2
     }
+
+    Invoke-SelfHeal
+    Start-Sleep -Seconds 2
 }

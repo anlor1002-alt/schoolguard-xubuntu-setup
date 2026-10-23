@@ -1,33 +1,19 @@
 @echo off
 setlocal EnableDelayedExpansion
-chcp 65001 >nul
 title SchoolGuard Pro - Buoc 1: Xoa Sach Veyon (Windows)
 
-:: Kiem tra quyen Administrator va thu nang quyen neu chua co
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [*] Chu y: Script can quyen Administrator de xoa sach dich vu Veyon.
-    echo [*] Dang yeu cau quyen Administrator qua UAC...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs" 2>nul
-    if !errorlevel! equ 0 (
-        exit /b
-    )
-    echo [*] Khong the tu dong nang quyen Administrator hoac UAC bi tu choi.
-    echo [*] Tiep tuc don dep tien trinh va go bo o cap do User...
-)
-
 echo.
 echo ================================================================
-echo    BƯỚC 1: TIÊU DIỆT ^& XÓA SẠCH VEYON KHỎI MÁY HỌC SINH WINDOWS
+echo    BUOC 1: TIEU DIET VA XOA SACH VEYON KHOI MAY HOC SINH WINDOWS
 echo ================================================================
 echo.
 
-echo [*] Dừng và vô hiệu hóa dịch vụ VeyonService...
+echo [*] Dung va vo hieu hoa dich vu VeyonService...
 sc.exe stop VeyonService >nul 2>&1
 sc.exe config VeyonService start= disabled >nul 2>&1
 sc.exe delete VeyonService >nul 2>&1
 
-echo [*] Tiêu diệt mọi tiến trình Veyon để giải phóng chuột và bàn phím...
+echo [*] Tieu diet moi tien trinh Veyon de giai phong chuot va ban phim...
 taskkill /F /IM VeyonWorker.exe /T >nul 2>&1
 taskkill /F /IM VeyonMaster.exe /T >nul 2>&1
 taskkill /F /IM VeyonService.exe /T >nul 2>&1
@@ -36,16 +22,30 @@ taskkill /F /IM veyon-worker.exe /T >nul 2>&1
 taskkill /F /IM veyon-configurator.exe /T >nul 2>&1
 taskkill /F /IM veyon-server.exe /T >nul 2>&1
 
-:: Chạy PowerShell Engine để gỡ cài đặt chuyên sâu và giải phóng BlockInput
+:: Chay PowerShell Engine de go cai dat chuyen sau va giai phong BlockInput
 if exist "%~dp0remove_veyon_win.ps1" (
-    echo [*] Thực thi bộ công cụ gỡ Veyon chuyên sâu: remove_veyon_win.ps1...
+    echo [*] Thuc thi bo cong cu go Veyon chuyen sau: remove_veyon_win.ps1...
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0remove_veyon_win.ps1"
 ) else (
-    echo [*] Đang tải bộ gỡ Veyon chuyên sâu từ VPS...
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$dst = Join-Path ([System.IO.Path]::GetTempPath()) 'remove_veyon_win.ps1'; [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; try { (New-Object System.Net.WebClient).DownloadFile('https://103-149-172-179.sslip.io/remove_veyon_win.ps1', $dst) } catch { try { (New-Object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove_veyon_win.ps1', $dst) } catch { (New-Object System.Net.WebClient).DownloadFile('http://103.149.172.179:4000/remove_veyon_win.ps1', $dst) } }; if (Test-Path $dst) { & $dst }"
+    echo [*] Dang tai bo go Veyon chuyen sau tu VPS...
+    set "TEMP_PS1=%TEMP%\remove_veyon_win.ps1"
+    del /f /q "!TEMP_PS1!" 2>nul
+    where curl.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        curl.exe -k -f -sSL "https://103-149-172-179.sslip.io/remove_veyon_win.ps1" -o "!TEMP_PS1!" 2>nul
+        if not exist "!TEMP_PS1!" (
+            curl.exe -f -sSL "http://103.149.172.179:4000/remove_veyon_win.ps1" -o "!TEMP_PS1!" 2>nul
+        )
+    )
+    if not exist "!TEMP_PS1!" (
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls; $wc = New-Object System.Net.WebClient; try { $wc.DownloadFile('http://103.149.172.179:4000/remove_veyon_win.ps1', '!TEMP_PS1!') } catch { $wc.DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove_veyon_win.ps1', '!TEMP_PS1!') }"
+    )
+    if exist "!TEMP_PS1!" (
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File "!TEMP_PS1!"
+    )
 )
 
-:: Dọn dẹp thư mục và shortcut còn sót
+:: Don dep thu muc va shortcut con sot
 if exist "%ProgramFiles%\Veyon" rmdir /s /q "%ProgramFiles%\Veyon" >nul 2>&1
 if exist "%ProgramFiles(x86)%\Veyon" rmdir /s /q "%ProgramFiles(x86)%\Veyon" >nul 2>&1
 if exist "C:\ProgramData\Veyon" rmdir /s /q "C:\ProgramData\Veyon" >nul 2>&1
@@ -53,7 +53,7 @@ del /f /q "%PUBLIC%\Desktop\*veyon*.lnk" >nul 2>&1
 del /f /q "%USERPROFILE%\Desktop\*veyon*.lnk" >nul 2>&1
 del /f /q "C:\Users\*\Desktop\*veyon*.lnk" >nul 2>&1
 
-:: Dọn dẹp khóa Registry
+:: Don dep khoa Registry
 reg delete "HKLM\SOFTWARE\Veyon Solutions" /f >nul 2>&1
 reg delete "HKLM\SOFTWARE\WOW6432Node\Veyon Solutions" /f >nul 2>&1
 reg delete "HKCU\Software\Veyon Solutions" /f >nul 2>&1
@@ -61,10 +61,8 @@ reg delete "HKLM\SYSTEM\CurrentControlSet\Services\VeyonService" /f >nul 2>&1
 
 echo.
 echo ================================================================
-echo  ✅ ĐÃ XÓA SẠCH VÀ VÔ HIỆU HÓA HOÀN TOÀN VEYON TRÊN WINDOWS
-echo  👉 BƯỚC 2: Hãy chạy file "Cai-Dat-SchoolGuard-Windows.bat"
-echo     để cài đặt hệ thống quản lý phòng máy SchoolGuard Pro
+echo  [OK] DA XOA SACH VA VO HIEU HOA HOAN TOAN VEYON TREN WINDOWS
+echo  [*] BUOC 2: Hay chay lenh cai dat SchoolGuard Pro Windows.
 echo ================================================================
 echo.
-pause
 exit /b 0
