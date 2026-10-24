@@ -27,18 +27,15 @@ if exist "%~dp0remove_veyon_win.ps1" (
     echo [*] Thuc thi bo cong cu go Veyon chuyen sau: remove_veyon_win.ps1...
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0remove_veyon_win.ps1"
 ) else (
-    echo [*] Dang tai bo go Veyon chuyen sau tu VPS...
+    echo [*] Dang tai bo go Veyon chuyen sau...
     set "TEMP_PS1=%TEMP%\remove_veyon_win.ps1"
     del /f /q "!TEMP_PS1!" 2>nul
     where curl.exe >nul 2>&1
     if !errorlevel! equ 0 (
-        curl.exe -k -f -sSL "https://103-149-172-179.sslip.io/remove_veyon_win.ps1" -o "!TEMP_PS1!" 2>nul
-        if not exist "!TEMP_PS1!" (
-            curl.exe -f -sSL "http://103.149.172.179:4000/remove_veyon_win.ps1" -o "!TEMP_PS1!" 2>nul
-        )
+        curl.exe -k -f -sSL "https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove_veyon_win.ps1" -o "!TEMP_PS1!" 2>nul
     )
     if not exist "!TEMP_PS1!" (
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls; $wc = New-Object System.Net.WebClient; try { $wc.DownloadFile('http://103.149.172.179:4000/remove_veyon_win.ps1', '!TEMP_PS1!') } catch { $wc.DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove_veyon_win.ps1', '!TEMP_PS1!') }"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls; $wc = New-Object System.Net.WebClient; $wc.DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove_veyon_win.ps1', '!TEMP_PS1!')"
     )
     if exist "!TEMP_PS1!" (
         powershell.exe -NoProfile -ExecutionPolicy Bypass -File "!TEMP_PS1!"

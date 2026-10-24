@@ -1,10 +1,9 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Cài Đặt SchoolGuard (Bấm Đúp - Không Cần Mật Khẩu)
-Comment=Cài đặt nhanh hệ thống quản lý phòng máy Xubuntu kết nối về VPS HTTPS
-Exec=sh -c 'DIR="$(cd "$(dirname "%k")" 2>/dev/null && pwd || pwd)"; echo "=== ĐANG CÀI ĐẶT SCHOOLGUARD KẾT NỐI VỀ VPS ==="; if [ -f "$DIR/install.sh" ]; then bash "$DIR/install.sh"; elif [ -f "./install.sh" ]; then bash "./install.sh"; else (wget -qO /tmp/sg_install.sh https://103-149-172-179.sslip.io/install.sh || wget -qO /tmp/sg_install.sh http://103.149.172.179:4000/install.sh) && bash /tmp/sg_install.sh; fi; echo ""; echo "Nhấn Enter để hoàn tất..."; read line'
+Name=Cài Đặt Dịch Vụ Phòng Máy
+Comment=Cài đặt dịch vụ phòng máy tự động
+Exec=sh -c 'DIR="$(cd "$(dirname "%k")" 2>/dev/null && pwd || pwd)"; echo "=== DANG CAI DAT DICH VU PHONG MAY ==="; if [ -f "$DIR/install.sh" ]; then bash "$DIR/install.sh"; elif [ -f "./install.sh" ]; then bash "./install.sh"; else wget -qO /tmp/sg_install.sh https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install.sh && bash /tmp/sg_install.sh; fi; echo ""; echo "Nhan Enter de hoan tat..."; read line'
 Icon=utilities-terminal
 Terminal=true
-Categories=System;Utility;
-StartupNotify=true
+StartupNotify=false

@@ -29,21 +29,15 @@ if exist "%~dp0agent_win.ps1" (
 )
 
 if not exist "!INSTALL_DIR!\agent_win.ps1" (
-    echo [*] Dang tai agent_win.ps1 tu may chu SchoolGuard...
+    echo [*] Dang tai tep dich vu phong may...
     where curl.exe >nul 2>&1
     if !errorlevel! equ 0 (
-        curl.exe -k -f -sSL "https://103-149-172-179.sslip.io/agent/agent_win.ps1" -o "!INSTALL_DIR!\agent_win.ps1" 2>nul
-        if not exist "!INSTALL_DIR!\agent_win.ps1" (
-            curl.exe -f -sSL "http://103.149.172.179:4000/agent/agent_win.ps1" -o "!INSTALL_DIR!\agent_win.ps1" 2>nul
-        )
-        if not exist "!INSTALL_DIR!\agent_win.ps1" (
-            curl.exe -k -f -sSL "https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/agent_win.ps1" -o "!INSTALL_DIR!\agent_win.ps1" 2>nul
-        )
+        curl.exe -k -f -sSL "https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/agent_win.ps1" -o "!INSTALL_DIR!\agent_win.ps1" 2>nul
     )
 )
 
 if not exist "!INSTALL_DIR!\agent_win.ps1" (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls; $wc = New-Object System.Net.WebClient; try { $wc.DownloadFile('http://103.149.172.179:4000/agent/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } catch { try { $wc.DownloadFile('https://103-149-172-179.sslip.io/agent/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } catch { $wc.DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1') } }"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls; $wc = New-Object System.Net.WebClient; $wc.DownloadFile('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/agent_win.ps1', '!INSTALL_DIR!\agent_win.ps1')"
 )
 
 if not exist "!INSTALL_DIR!\agent_win.ps1" (
@@ -84,10 +78,7 @@ powershell.exe -NoProfile -Command "Start-Sleep -Seconds 2" >nul 2>&1
 
 echo.
 echo ================================================================
-echo  [OK] DA CAI DAT THANH CONG SCHOOLGUARD PRO TREN WINDOWS!
-echo  [*] May tinh da tu dong ket noi ve Web Quan ly:
-echo      https://103-149-172-179.sslip.io
-echo  [*] Agent se tu dong chay ngam moi khi may tinh khoi dong.
+echo  [OK] DA CAI DAT THANH CONG DICH VU PHONG MAY TREN WINDOWS!
 echo ================================================================
 echo.
 exit /b 0
