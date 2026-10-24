@@ -1334,9 +1334,15 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             os.chmod(ov_path, 0o755)
             if os.geteuid() == 0:
                 subprocess.run(["chattr", "+i", my_path, ov_path], stderr=subprocess.DEVNULL)
-            os._exit(0)  # systemd Restart=always sẽ tự khởi động lại bản mới ngay lập tức
+            if self.overlay_proc and self.overlay_proc.poll() is None:
+                try:
+                    self.overlay_proc.kill()
+                except Exception:
+                    pass
+            subprocess.run(["pkill", "-9", "-f", "overlay_ui.py"], stderr=subprocess.DEVNULL)
+            os.execv(sys.executable, [sys.executable, my_path])
         except Exception:
-            pass
+            os._exit(0)
 
     def _send_status(self):
         if not self.ws or not self.ws.connected:
