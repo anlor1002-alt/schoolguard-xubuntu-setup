@@ -191,6 +191,9 @@ $Global:SharedState = [hashtable]::Synchronized(@{
     FrameTick     = 0
     VeyonStatus   = "disabled"
     VeyonRestarts = 0
+    BlockedApps   = @()
+    RunningApps   = @()
+    ActiveWindow  = ""
 })
 
 # ============================================================================
@@ -361,7 +364,7 @@ $uiPowershell.Runspace = $uiRunspace
     $isShowing = $false
 
     $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 70
+    $timer.Interval = 25
     $timer.Add_Tick({
         $mode = $SharedState.Mode
         if ($mode -eq "lock" -or $mode -eq "broadcast") {
@@ -486,6 +489,77 @@ function Invoke-SelfHeal {
     } catch {}
 }
 
+function Update-RunningAppsAndEnforceBlock {
+    $protected = @("explorer", "powershell", "pwsh", "cmd", "conhost", "svchost", "csrss", "wininit", "winlogon", "lsass", "services", "smss", "dwm", "sihost", "taskhostw", "ctfmon", "fontdrvhost", "runtimebroker", "searchhost", "startmenuexperiencehost", "shellexperiencehost", "textinputhost", "wscript", "cscript", "idle", "system")
+    $running = New-Object System.Collections.Generic.HashSet[string]
+    $activeWin = ""
+    $blocked = $Global:SharedState.BlockedApps
+
+    try {
+        $procs = Get-Process -ErrorAction SilentlyContinue
+        foreach ($p in $procs) {
+            if ($p.Id -eq $PID) { continue }
+            $pName = ($p.ProcessName + "").ToLower()
+            if (-not $pName -or ($protected -contains $pName)) { continue }
+
+            if ($blocked -and $blocked.Count -gt 0) {
+                $shouldKill = $false
+                foreach ($b in $blocked) {
+                    $kw = ($b + "").Trim().ToLower()
+                    if ($kw -and ($pName -like "*$kw*")) {
+                        $shouldKill = $true
+                        break
+                    }
+                }
+                if ($shouldKill) {
+                    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+                    continue
+                }
+            }
+
+            if ($p.MainWindowHandle -ne 0 -and $p.MainWindowTitle) {
+                [void]$running.Add($p.ProcessName)
+                if (-not $activeWin) {
+                    $activeWin = $p.MainWindowTitle
+                }
+            }
+        }
+    } catch {}
+
+    $Global:SharedState.RunningApps = @($running)
+    $Global:SharedState.ActiveWindow = $activeWin
+}
+
+function Stop-StudentApps($appTargets) {
+    $protected = @("explorer", "powershell", "pwsh", "svchost", "csrss", "wininit", "winlogon", "lsass", "services", "smss", "dwm", "sihost", "taskhostw", "ctfmon", "wscript", "cscript", "idle", "system")
+    $keywords = @()
+    if ($appTargets -is [Array]) {
+        $keywords = $appTargets
+    } elseif ($appTargets) {
+        $keywords = ($appTargets.ToString() -split ",")
+    }
+    foreach ($kwRaw in $keywords) {
+        $kw = ($kwRaw + "").Trim().ToLower()
+        if (-not $kw -or ($protected -contains $kw)) { continue }
+        try {
+            Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.Id -ne $PID -and ($protected -notcontains $_.ProcessName.ToLower()) -and ($_.ProcessName.ToLower() -like "*$kw*")
+            } | Stop-Process -Force -ErrorAction SilentlyContinue
+        } catch {}
+    }
+}
+
+function Close-AllStudentApps {
+    $protected = @("explorer", "powershell", "pwsh", "cmd", "conhost", "svchost", "csrss", "wininit", "winlogon", "lsass", "services", "smss", "dwm", "sihost", "taskhostw", "ctfmon", "fontdrvhost", "runtimebroker", "searchhost", "startmenuexperiencehost", "shellexperiencehost", "textinputhost", "wscript", "cscript", "idle", "system")
+    try {
+        Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.Id -ne $PID -and $_.MainWindowHandle -ne 0 -and ($protected -notcontains $_.ProcessName.ToLower())
+        } | ForEach-Object {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
+
 function Send-WsJson($ws, $obj) {
     try {
         if ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
@@ -500,6 +574,7 @@ function Send-WsJson($ws, $obj) {
 function Send-WsStatus($ws) {
     Send-WsJson $ws @{
         type           = "STATUS"
+        agent_version  = "2.5"
         machine_id     = $MACHINE_ID
         hostname       = $HOSTNAME
         ip             = (Get-LocalIp)
@@ -509,6 +584,9 @@ function Send-WsStatus($ws) {
         mode           = $Global:SharedState.Mode
         veyon_status   = $Global:SharedState.VeyonStatus
         veyon_restarts = $Global:SharedState.VeyonRestarts
+        blocked_apps   = @($Global:SharedState.BlockedApps)
+        running_apps   = @($Global:SharedState.RunningApps)
+        active_window  = $Global:SharedState.ActiveWindow
     }
 }
 
@@ -530,8 +608,10 @@ while ($true) {
         $uri = [Uri]$currentWsUrl
         $ws.ConnectAsync($uri, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
 
+        Update-RunningAppsAndEnforceBlock
         Send-WsJson $ws @{
             type           = "REGISTER"
+            agent_version  = "2.5"
             machine_id     = $MACHINE_ID
             hostname       = $HOSTNAME
             ip             = (Get-LocalIp)
@@ -541,6 +621,9 @@ while ($true) {
             mode           = $Global:SharedState.Mode
             veyon_status   = $Global:SharedState.VeyonStatus
             veyon_restarts = $Global:SharedState.VeyonRestarts
+            blocked_apps   = @($Global:SharedState.BlockedApps)
+            running_apps   = @($Global:SharedState.RunningApps)
+            active_window  = $Global:SharedState.ActiveWindow
         }
 
         $recvBuf = New-Object byte[] 65536
@@ -550,9 +633,10 @@ while ($true) {
 
         $lastScreenTime = [DateTime]::MinValue
         $lastHealTime = [DateTime]::MinValue
+        $lastAppCheckTime = [DateTime]::MinValue
 
         while ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
-            if ($recvTask.Wait(120)) {
+            if ($recvTask.Wait(25)) {
                 $res = $recvTask.GetAwaiter().GetResult()
                 if ($res.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
                     break
@@ -574,24 +658,60 @@ while ($true) {
                                 if ($payload.machine_name) { $Global:SharedState.MachineName = $payload.machine_name }
                                 if ($null -ne $payload.live_focus) { $Global:SharedState.LiveFocus = [bool]$payload.live_focus }
                                 if ($payload.veyon_disabled) { $Global:SharedState.VeyonStatus = "disabled" }
+                                if ($null -ne $payload.blocked_apps) {
+                                    $Global:SharedState.BlockedApps = @($payload.blocked_apps)
+                                    Update-RunningAppsAndEnforceBlock
+                                }
                             }
                             "LOCK" {
                                 if ($payload.message) { $Global:SharedState.LockMessage = $payload.message }
                                 $Global:SharedState.LockInput = $true
                                 $Global:SharedState.Mode = "lock"
+                                Send-WsStatus $ws
                                 [WinGuardSecurity]::BlockInput($true) | Out-Null
                                 [WinGuardSecurity]::InstallHook() | Out-Null
                                 [WinGuardSecurity]::SetTaskMgrDisabled($true) | Out-Null
-                                Send-WsStatus $ws
+                                $lastScreenTime = [DateTime]::UtcNow.AddSeconds(-1.85)
                             }
                             "UNLOCK" {
                                 $Global:SharedState.Mode = "normal"
                                 $Global:SharedState.LockInput = $false
-                                Stop-Process -Name "VeyonWorker", "VeyonMaster", "*veyon*" -Force -ErrorAction SilentlyContinue
                                 [WinGuardSecurity]::BlockInput($false) | Out-Null
                                 [WinGuardSecurity]::UninstallHook() | Out-Null
                                 [WinGuardSecurity]::SetTaskMgrDisabled($false) | Out-Null
                                 Send-WsStatus $ws
+                                Stop-Process -Name "VeyonWorker", "VeyonMaster", "*veyon*" -Force -ErrorAction SilentlyContinue
+                                $lastScreenTime = [DateTime]::UtcNow.AddSeconds(-1.85)
+                            }
+                            "SET_BLOCKED_APPS" {
+                                if ($null -ne $payload.apps) {
+                                    $Global:SharedState.BlockedApps = @($payload.apps)
+                                } else {
+                                    $Global:SharedState.BlockedApps = @()
+                                }
+                                Update-RunningAppsAndEnforceBlock
+                                Send-WsStatus $ws
+                                $lastScreenTime = [DateTime]::UtcNow.AddSeconds(-1.85)
+                            }
+                            "KILL_APP" {
+                                $targetApp = if ($payload.app) { $payload.app } else { $payload.apps }
+                                Stop-StudentApps $targetApp
+                                Update-RunningAppsAndEnforceBlock
+                                Send-WsStatus $ws
+                                $lastScreenTime = [DateTime]::UtcNow.AddSeconds(-1.85)
+                            }
+                            "CLOSE_ALL_APPS" {
+                                Close-AllStudentApps
+                                Update-RunningAppsAndEnforceBlock
+                                Send-WsStatus $ws
+                                $lastScreenTime = [DateTime]::UtcNow.AddSeconds(-1.85)
+                            }
+                            "LAUNCH_APP" {
+                                $appCmd = if ($payload.app) { $payload.app } else { $payload.cmd }
+                                if ($appCmd) {
+                                    try { Start-Process $appCmd } catch {}
+                                    $lastScreenTime = [DateTime]::UtcNow.AddSeconds(-1.4)
+                                }
                             }
                             "DISABLE_VEYON" {
                                 $Global:SharedState.VeyonStatus = "disabled"
@@ -702,7 +822,12 @@ while ($true) {
             }
 
             $now = [DateTime]::UtcNow
-            $intervalSec = if ($Global:SharedState.LiveFocus) { 0.45 } else { 2.0 }
+            if (($now - $lastAppCheckTime).TotalSeconds -ge 0.6) {
+                $lastAppCheckTime = $now
+                Update-RunningAppsAndEnforceBlock
+            }
+
+            $intervalSec = if ($Global:SharedState.LiveFocus) { 0.45 } else { 1.5 }
             if (($now - $lastScreenTime).TotalSeconds -ge $intervalSec) {
                 $lastScreenTime = $now
                 $b64 = Capture-ScreenBase64
@@ -717,7 +842,7 @@ while ($true) {
                 }
             }
 
-            if (($now - $lastHealTime).TotalSeconds -ge 4.0) {
+            if (($now - $lastHealTime).TotalSeconds -ge 3.0) {
                 $lastHealTime = $now
                 Invoke-SelfHeal
                 Send-WsStatus $ws

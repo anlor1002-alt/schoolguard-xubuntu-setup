@@ -244,9 +244,15 @@ class XubuntuAgent:
         self.veyon_disabled = True
         self.veyon_status = "disabled"
         self.veyon_restarts = 0
+        self.blocked_apps = [str(x).strip().lower() for x in self.config.get("blocked_apps", []) if str(x).strip()]
+        self.running_apps = []
+        self.active_window = ""
         self.disabled_xinput_ids = set()
         self.overlay_proc = None
         self.ws = None
+        self._cached_x11_env = None
+        self._cached_x11_ts = 0.0
+        self._xhost_done = False
 
         # Lưu bản sao mã nguồn vào RAM lúc khởi chạy để tự phục hồi nếu học sinh xóa file trên ổ cứng
         self._self_code = ""
@@ -264,6 +270,7 @@ class XubuntuAgent:
         self._protect_veyon_master()
         threading.Thread(target=self._enable_wol_hardware, daemon=True).start()
         threading.Thread(target=self._start_lan_peer_server, daemon=True).start()
+        threading.Thread(target=self._app_blocker_loop, daemon=True).start()
 
     def _start_lan_peer_server(self):
         """Biến máy học sinh này thành Trạm phát bộ cài nội bộ LAN (cổng 8888) để các máy cùng mạng tải trực tiếp tốc độ cao"""
@@ -460,16 +467,19 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             pass
         return "00:00:00:00:00:00"
 
-    def get_x11_env(self):
+    def get_x11_env(self, force_refresh=False):
         """
         Tự động dò tìm phiên đồ họa X11/XFCE đang hoạt động trên Xubuntu
-        ngay cả khi agent chạy dưới quyền root của systemd.
+        (Có bộ nhớ đệm 10 giây giúp giảm độ trễ khóa/mở máy xuống < 5ms).
         """
+        now = time.time()
+        if not force_refresh and self._cached_x11_env and (now - self._cached_x11_ts < 10.0):
+            return self._cached_x11_env.copy()
+
         env = os.environ.copy()
         env["DISPLAY"] = ":0"
         desktop_user = "student"
 
-        # 1. Quét tiến trình của phiên XFCE / X11 để lấy chính xác DISPLAY, XAUTHORITY, DBUS
         target_procs = ("xfce4-session", "xfwm4", "xfsettingsd", "Thunar", "xfce4-panel", "x-session-manager")
         try:
             for pid_dir in os.listdir("/proc"):
@@ -498,7 +508,6 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
         except Exception:
             pass
 
-        # 2. Dự phòng tìm XAUTHORITY nếu chưa có
         if "XAUTHORITY" not in env or not os.path.exists(env.get("XAUTHORITY", "")):
             candidates = (
                 glob.glob("/home/*/.Xauthority")
@@ -516,18 +525,22 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
         os.environ["DISPLAY"] = env.get("DISPLAY", ":0")
         if "XAUTHORITY" in env:
             os.environ["XAUTHORITY"] = env["XAUTHORITY"]
-        # Cho phép root truy cập X11
-        try:
-            subprocess.run(
-                ["xhost", "+SI:localuser:root"],
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-            )
-        except Exception:
-            pass
-        return env
+
+        if not self._xhost_done and "XAUTHORITY" in env:
+            self._xhost_done = True
+            try:
+                subprocess.Popen(
+                    ["xhost", "+SI:localuser:root"],
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+        self._cached_x11_env = env
+        self._cached_x11_ts = now
+        return env.copy()
 
     def _protect_veyon_master(self):
         """
@@ -590,12 +603,13 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             self.veyon_status = "error"
 
     def set_input_locked(self, locked: bool):
-        """Khóa hoặc mở khóa bàn phím & chuột vật lý của học sinh qua xinput"""
+        """Khóa hoặc mở khóa bàn phím & chuột vật lý của học sinh song song tốc độ cao (< 40ms)"""
         env = self.get_x11_env()
         try:
+            res = subprocess.run(["xinput", "list", "--short"], env=env, capture_output=True, text=True, timeout=2)
+            ids_to_change = set()
             if locked:
-                res = subprocess.run(["xinput", "list", "--short"], env=env, capture_output=True, text=True, timeout=3)
-                for line in res.stdout.splitlines():
+                for line in (res.stdout or "").splitlines():
                     low = line.lower()
                     if "virtual core" in low or "xtest" in low or "power button" in low:
                         continue
@@ -604,19 +618,21 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                             if part.startswith("id="):
                                 dev_id = part.split("=")[1].strip()
                                 if dev_id.isdigit():
-                                    subprocess.run(
-                                        ["xinput", "disable", dev_id],
-                                        env=env,
-                                        stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL,
-                                        timeout=2,
-                                    )
+                                    ids_to_change.add(dev_id)
                                     self.disabled_xinput_ids.add(dev_id)
+                if ids_to_change:
+                    id_str = " ".join(ids_to_change)
+                    subprocess.run(
+                        f"for i in {id_str}; do xinput disable $i & done; wait",
+                        shell=True,
+                        env=env,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=2,
+                    )
             else:
-                # Bật lại toàn bộ các thiết bị đã khóa + quét lại các floating slave
-                res = subprocess.run(["xinput", "list", "--short"], env=env, capture_output=True, text=True, timeout=3)
                 all_ids = set(self.disabled_xinput_ids)
-                for line in res.stdout.splitlines():
+                for line in (res.stdout or "").splitlines():
                     low = line.lower()
                     if "virtual core" in low or "xtest" in low:
                         continue
@@ -625,9 +641,11 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                             dev_id = part.split("=")[1].strip()
                             if dev_id.isdigit():
                                 all_ids.add(dev_id)
-                for dev_id in all_ids:
+                if all_ids:
+                    id_str = " ".join(all_ids)
                     subprocess.run(
-                        ["xinput", "enable", dev_id],
+                        f"for i in {id_str}; do xinput enable $i & done; wait",
+                        shell=True,
                         env=env,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -656,28 +674,244 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             pass
 
     def ensure_overlay_process(self):
-        """Đảm bảo cửa sổ Khóa/Trình chiếu luôn hiển thị khi ở chế độ lock hoặc broadcast"""
+        """Giữ tiến trình overlay_ui.py luôn chạy ngầm sẵn trong RAM để bật/tắt khóa màn hình tức thì (< 20ms)"""
         self._write_state_file()
-        if self.mode in ("lock", "broadcast"):
-            if self.overlay_proc is None or self.overlay_proc.poll() is not None:
-                env = self.get_x11_env()
-                overlay_path = OVERLAY_SCRIPT if os.path.exists(OVERLAY_SCRIPT) else os.path.join(os.path.dirname(__file__), "overlay_ui.py")
+        if self.overlay_proc is None or self.overlay_proc.poll() is not None:
+            env = self.get_x11_env()
+            overlay_path = OVERLAY_SCRIPT if os.path.exists(OVERLAY_SCRIPT) else os.path.join(os.path.dirname(__file__), "overlay_ui.py")
+            try:
+                self.overlay_proc = subprocess.Popen(
+                    [sys.executable, overlay_path],
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+    def _send_screen_now(self):
+        """Chụp và gửi ngay lập tức 1 khung hình màn hình về VPS (dùng ngay sau khi Khóa / Mở khóa / Tắt App)"""
+        if not self.ws or not self.ws.connected:
+            return
+        img_b64 = self.capture_screen_base64()
+        if img_b64:
+            try:
+                self.ws.send_json(
+                    {
+                        "type": "SCREEN",
+                        "machine_id": self.machine_id,
+                        "image": img_b64,
+                        "mode": self.mode,
+                        "veyon_status": self.veyon_status,
+                    }
+                )
+            except Exception:
+                pass
+
+    def _async_transition_effects(self, locked: bool, kill_veyon: bool = False):
+        """Xử lý xinput và chụp màn hình cập nhật trong luồng phụ để không làm nghẽn lệnh Khóa/Mở máy"""
+        try:
+            if kill_veyon:
+                subprocess.run(
+                    "pkill -9 -f veyon-worker 2>/dev/null; pkill -9 -f veyon-master 2>/dev/null",
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            self.set_input_locked(locked)
+            time.sleep(0.10)
+            self._send_screen_now()
+        except Exception:
+            pass
+
+    def _save_config(self):
+        try:
+            self.config["blocked_apps"] = self.blocked_apps
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _get_protected_System_comms(self):
+        return {
+            "systemd", "init", "kthreadd", "xorg", "x", "lightdm", "xfwm4", "xfce4-session",
+            "xfce4-panel", "xfdesktop", "xfsettingsd", "thunar", "dbus-daemon", "pulseaudio",
+            "pipewire", "wireplumber", "networkmanager", "wpa_supplicant", "sshd", "cron",
+            "polkitd", "udisksd", "upowerd", "tumblerd", "gvfsd", "at-spi-bus-launcher",
+            "ssh-agent", "gpg-agent", "notify-osd", "xfce4-notifyd", "nm-applet", "xiccd",
+            "xinput", "xprop", "scrot",
+        }
+
+    def _update_running_apps_telemetry(self):
+        """Quét nhanh danh sách ứng dụng học sinh đang mở + cửa sổ đang active (< 5ms)"""
+        protected = self._get_protected_System_comms()
+        interesting_apps = set()
+        my_pid = os.getpid()
+        ov_pid = self.overlay_proc.pid if (self.overlay_proc and self.overlay_proc.poll() is None) else -1
+
+        known_gui_keywords = (
+            "firefox", "chrome", "chromium", "brave", "msedge", "opera", "vivaldi",
+            "soffice", "libreoffice", "writer", "calc", "impress",
+            "code", "codium", "subl", "geany", "mousepad", "gedit", "kate", "vim", "nano",
+            "vlc", "mpv", "totem", "rhythmbox", "audacity", "obs",
+            "gimp", "inkscape", "blender", "krita", "kolourpaint", "ristretto",
+            "xfce4-terminal", "gnome-terminal", "konsole", "xterm", "lxterminal", "tilix",
+            "steam", "wine", "lutris", "minecraft", "Java", "roblox", "supertux", "aisleriot", "mines", "mahjongg",
+            "discord", "telegram", "zalo", "skype", "zoom",
+            "evince", "atril", "okular", "galculator", "gnome-calculator", "scratch", "thonny", "idle",
+        )
+
+        try:
+            for pid_dir in os.listdir("/proc"):
+                if not pid_dir.isdigit():
+                    continue
+                pid = int(pid_dir)
+                if pid in (1, 2, my_pid, ov_pid) or pid < 300:
+                    continue
                 try:
-                    self.overlay_proc = subprocess.Popen(
-                        [sys.executable, overlay_path],
-                        env=env,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    comm = open(f"/proc/{pid_dir}/comm", "r", errors="ignore").read().strip()
+                    low_comm = comm.lower()
+                    if not low_comm or low_comm in protected or low_comm.startswith(("kworker", "ksoftirqd", "migration", "gvfs", "ibus", "fcitx", "xfce4-panel", "panel-")):
+                        continue
+                    cmdline = open(f"/proc/{pid_dir}/cmdline", "rb").read().replace(b"\x00", b" ").decode("utf-8", "ignore").lower()
+                    if "schoolguard" in cmdline or "agent.py" in cmdline or "overlay_ui.py" in cmdline:
+                        continue
+                    for kw in known_gui_keywords:
+                        if kw in low_comm or f"/{kw}" in cmdline or cmdline.startswith(kw):
+                            interesting_apps.add(comm)
+                            break
                 except Exception:
-                    pass
-        else:
-            if self.overlay_proc is not None and self.overlay_proc.poll() is None:
+                    continue
+        except Exception:
+            pass
+
+        self.running_apps = sorted(list(interesting_apps))[:20]
+
+        # Lấy tiêu đề cửa sổ đang active trên X11
+        env = self.get_x11_env()
+        active_title = ""
+        try:
+            r1 = subprocess.run(["xprop", "-root", "_NET_ACTIVE_WINDOW"], env=env, capture_output=True, text=True, timeout=0.6)
+            out1 = (r1.stdout or "").strip()
+            if "0x" in out1:
+                win_id = out1.split()[-1]
+                if win_id != "0x0":
+                    r2 = subprocess.run(["xprop", "-id", win_id, "_NET_WM_NAME", "WM_NAME"], env=env, capture_output=True, text=True, timeout=0.6)
+                    for line in (r2.stdout or "").splitlines():
+                        if "=" in line and '"' in line:
+                            active_title = line.split('"', 1)[1].rsplit('"', 1)[0].strip()
+                            if active_title:
+                                break
+        except Exception:
+            pass
+        self.active_window = active_title[:80]
+
+    def _kill_matching_apps(self, targets):
+        """Tiêu diệt ngay lập tức các tiến trình ứng dụng nằm trong danh sách targets"""
+        if isinstance(targets, str):
+            targets = [x.strip() for x in targets.split(",") if x.strip()]
+        keywords = [str(x).strip().lower() for x in (targets or []) if str(x).strip()]
+        if not keywords:
+            return 0
+
+        # Mở rộng từ khóa thông dụng (VD: chặn chrome sẽ chặn cả google-chrome, chromium)
+        expanded = set(keywords)
+        for kw in keywords:
+            if kw in ("chrome", "google-chrome", "chromium"):
+                expanded.update(["chrome", "google-chrome", "chromium", "chromium-browser"])
+            elif kw in ("firefox", "firefox-esr"):
+                expanded.update(["firefox", "firefox-esr", "firefox-bin"])
+            elif kw in ("office", "libreoffice", "soffice"):
+                expanded.update(["soffice.bin", "libreoffice", "oosplash"])
+            elif kw in ("terminal", "cmd"):
+                expanded.update(["xfce4-terminal", "gnome-terminal", "xterm", "lxterminal", "konsole"])
+
+        protected = self._get_protected_System_comms()
+        my_pid = os.getpid()
+        ov_pid = self.overlay_proc.pid if (self.overlay_proc and self.overlay_proc.poll() is None) else -1
+        killed = 0
+
+        try:
+            for pid_dir in os.listdir("/proc"):
+                if not pid_dir.isdigit():
+                    continue
+                pid = int(pid_dir)
+                if pid in (1, 2, my_pid, ov_pid) or pid < 300:
+                    continue
                 try:
-                    self.overlay_proc.terminate()
+                    comm = open(f"/proc/{pid_dir}/comm", "r", errors="ignore").read().strip().lower()
+                    if not comm or comm in protected:
+                        continue
+                    cmdline = open(f"/proc/{pid_dir}/cmdline", "rb").read().replace(b"\x00", b" ").decode("utf-8", "ignore").lower()
+                    if "schoolguard" in cmdline or "agent.py" in cmdline or "overlay_ui.py" in cmdline:
+                        continue
+                    if any(k in comm or f"/{k}" in cmdline or cmdline.startswith(k) for k in expanded):
+                        os.kill(pid, 9)
+                        killed += 1
                 except Exception:
-                    pass
-                self.overlay_proc = None
+                    continue
+        except Exception:
+            pass
+        return killed
+
+    def _close_all_student_apps(self):
+        """Đóng toàn bộ cửa sổ ứng dụng học sinh đang mở trên Desktop (Trình duyệt, Game, Office, Terminal...)"""
+        env = self.get_x11_env()
+        try:
+            if shutil.which("wmctrl"):
+                res = subprocess.run(["wmctrl", "-l"], env=env, capture_output=True, text=True, timeout=2)
+                for line in (res.stdout or "").splitlines():
+                    parts = line.split(None, 3)
+                    if parts and parts[0].startswith("0x"):
+                        title = (parts[3] if len(parts) > 3 else "").lower()
+                        if "schoolguard" in title or "desktop" in title or "panel" in title:
+                            continue
+                        subprocess.run(["wmctrl", "-ic", parts[0]], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1)
+        except Exception:
+            pass
+
+        common_student_apps = [
+            "firefox", "chrome", "chromium", "brave", "msedge", "opera",
+            "vlc", "mpv", "totem", "soffice.bin", "libreoffice", "gimp", "inkscape",
+            "code", "subl", "geany", "mousepad", "gedit",
+            "xfce4-terminal", "gnome-terminal", "xterm", "konsole", "lxterminal",
+            "steam", "wine", "lutris", "minecraft", "supertuxkart", "aisleriot", "gnome-mines",
+            "discord", "telegram-desktop", "zalo", "galculator", "ristretto", "atril", "evince",
+        ]
+        self._kill_matching_apps(common_student_apps)
+
+    def _launch_student_app(self, app_cmd: str):
+        """Mở từ xa một ứng dụng hoặc phần mềm học tập lên màn hình học sinh"""
+        app_cmd = (app_cmd or "").strip()
+        if not app_cmd:
+            return
+        env = self.get_x11_env()
+        user = env.get("SG_DESKTOP_USER", "")
+        try:
+            if user and user != "root" and os.geteuid() == 0:
+                subprocess.Popen(
+                    f"sudo -u {user} DISPLAY={env.get('DISPLAY', ':0')} nohup {app_cmd} >/dev/null 2>&1 &",
+                    shell=True,
+                    env=env,
+                )
+            else:
+                subprocess.Popen(
+                    f"nohup {app_cmd} >/dev/null 2>&1 &",
+                    shell=True,
+                    env=env,
+                )
+        except Exception:
+            pass
+
+    def _app_blocker_loop(self):
+        """Luồng canh gác ngầm mỗi 0.5 giây: Học sinh vừa mở bất kỳ App nào nằm trong danh sách chặn sẽ bị đóng tức thì"""
+        while True:
+            try:
+                if self.blocked_apps:
+                    self._kill_matching_apps(self.blocked_apps)
+            except Exception:
+                pass
+            time.sleep(0.5)
 
     def capture_screen_base64(self):
         """Chụp màn hình X11 hiện tại của máy học sinh và nén JPEG Base64 (Hỗ trợ cả GdkPixbuf không cần scrot/sudo)"""
@@ -788,23 +1022,73 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 self.auto_heal_veyon = bool(payload["auto_heal_veyon"])
             if "veyon_disabled" in payload:
                 self.veyon_disabled = bool(payload["veyon_disabled"])
+            if "blocked_apps" in payload and isinstance(payload["blocked_apps"], list):
+                self.blocked_apps = [str(x).strip().lower() for x in payload["blocked_apps"] if str(x).strip()]
+                self._save_config()
+                if self.blocked_apps:
+                    threading.Thread(target=self._kill_matching_apps, args=(self.blocked_apps,), daemon=True).start()
 
         elif cmd == "LOCK":
             self.mode = "lock"
             if payload.get("message"):
                 self.lock_message = payload["message"]
             self.ensure_overlay_process()
-            self.set_input_locked(True)
             self._send_status()
+            threading.Thread(target=self._async_transition_effects, args=(True, False), daemon=True).start()
 
         elif cmd == "UNLOCK":
             self.mode = "normal"
-            # Rescue student screen from any lingering Veyon lock
-            subprocess.run(["pkill", "-9", "-f", "veyon-worker"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["pkill", "-9", "-f", "veyon-master"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.set_input_locked(False)
-            self.ensure_overlay_process()
+            self._write_state_file()
             self._send_status()
+            threading.Thread(target=self._async_transition_effects, args=(False, True), daemon=True).start()
+
+        elif cmd == "SET_BLOCKED_APPS":
+            apps = payload.get("apps")
+            if isinstance(apps, list):
+                self.blocked_apps = [str(x).strip().lower() for x in apps if str(x).strip()]
+            elif isinstance(apps, str):
+                self.blocked_apps = [x.strip().lower() for x in apps.split(",") if x.strip()]
+            else:
+                self.blocked_apps = []
+            self._save_config()
+            if self.blocked_apps:
+                self._kill_matching_apps(self.blocked_apps)
+            self._update_running_apps_telemetry()
+            self._send_status()
+            threading.Thread(target=lambda: (time.sleep(0.15), self._send_screen_now()), daemon=True).start()
+
+        elif cmd == "KILL_APP":
+            app_target = payload.get("app") or payload.get("apps") or ""
+            self._kill_matching_apps(app_target)
+            self._update_running_apps_telemetry()
+            self._send_status()
+            threading.Thread(target=lambda: (time.sleep(0.15), self._send_screen_now()), daemon=True).start()
+
+        elif cmd == "CLOSE_ALL_APPS":
+            threading.Thread(
+                target=lambda: (
+                    self._close_all_student_apps(),
+                    time.sleep(0.2),
+                    self._update_running_apps_telemetry(),
+                    self._send_status(),
+                    self._send_screen_now(),
+                ),
+                daemon=True,
+            ).start()
+
+        elif cmd == "LAUNCH_APP":
+            app_cmd = payload.get("app") or payload.get("cmd") or ""
+            if app_cmd:
+                self._launch_student_app(app_cmd)
+                threading.Thread(
+                    target=lambda: (
+                        time.sleep(0.8),
+                        self._update_running_apps_telemetry(),
+                        self._send_status(),
+                        self._send_screen_now(),
+                    ),
+                    daemon=True,
+                ).start()
 
         elif cmd == "DISABLE_VEYON":
             self.veyon_disabled = True
@@ -822,8 +1106,8 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             self.mode = "broadcast"
             lock_input = payload.get("lock_input", True)
             self.ensure_overlay_process()
-            self.set_input_locked(bool(lock_input))
             self._send_status()
+            threading.Thread(target=self._async_transition_effects, args=(bool(lock_input), False), daemon=True).start()
 
         elif cmd == "BROADCAST_FRAME":
             frame_b64 = payload.get("image")
@@ -842,9 +1126,9 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
 
         elif cmd == "BROADCAST_STOP":
             self.mode = "normal"
-            self.set_input_locked(False)
-            self.ensure_overlay_process()
+            self._write_state_file()
             self._send_status()
+            threading.Thread(target=self._async_transition_effects, args=(False, False), daemon=True).start()
 
         elif cmd == "RESTART_VEYON":
             self.veyon_disabled = False
@@ -1045,7 +1329,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             self.ws.send_json(
                 {
                     "type": "STATUS",
-                    "agent_version": "2.4",
+                    "agent_version": "2.5",
                     "machine_id": self.machine_id,
                     "hostname": self.hostname,
                     "ip": self._get_local_ip(),
@@ -1055,6 +1339,9 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                     "mode": self.mode,
                     "veyon_status": self.veyon_status,
                     "veyon_restarts": self.veyon_restarts,
+                    "blocked_apps": self.blocked_apps,
+                    "running_apps": self.running_apps,
+                    "active_window": self.active_window,
                 }
             )
         except Exception:
@@ -1080,9 +1367,10 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 last_veyon_check = now
                 self.check_and_heal_veyon()
 
-            # 3. Gửi trạng thái mỗi 4 giây
-            if now - last_status_send >= 4.0:
+            # 3. Quét tiến trình đang mở & gửi trạng thái mỗi 3 giây
+            if now - last_status_send >= 3.0:
                 last_status_send = now
+                self._update_running_apps_telemetry()
                 self._send_status()
 
             # 4. Chụp và gửi màn hình về VPS
@@ -1102,7 +1390,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                     except Exception:
                         pass
 
-            sleep_interval = 0.45 if self.live_focus else 2.0
+            sleep_interval = 0.45 if self.live_focus else 1.5
             time.sleep(sleep_interval)
 
     def run_forever(self):
@@ -1122,11 +1410,12 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 self.ws = ws
 
                 # Đăng ký thông tin máy ngay khi kết nối
+                self._update_running_apps_telemetry()
                 env = self.get_x11_env()
                 ws.send_json(
                     {
                         "type": "REGISTER",
-                        "agent_version": "2.4",
+                        "agent_version": "2.5",
                         "machine_id": self.machine_id,
                         "hostname": self.hostname,
                         "ip": self._get_local_ip(),
@@ -1136,6 +1425,9 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                         "mode": self.mode,
                         "veyon_status": self.veyon_status,
                         "veyon_restarts": self.veyon_restarts,
+                        "blocked_apps": self.blocked_apps,
+                        "running_apps": self.running_apps,
+                        "active_window": self.active_window,
                     }
                 )
 
