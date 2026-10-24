@@ -158,6 +158,7 @@ class GtkOverlayApp:
         self.last_state_mtime = 0
         self.is_visible = False
         self.current_mode = "normal"
+        self.win.hide()
 
         self._tick_clock()
         self._poll_state()

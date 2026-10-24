@@ -263,10 +263,16 @@ class XubuntuAgent:
             if os.path.exists(OVERLAY_SCRIPT):
                 with open(OVERLAY_SCRIPT, "r", encoding="utf-8") as f:
                     self._overlay_code = f.read()
+            if "Pre-Warmed Persistent Daemon" not in self._overlay_code:
+                urllib.request.urlretrieve(f"{self.vps_http}/agent/overlay_ui.py", OVERLAY_SCRIPT)
+                with open(OVERLAY_SCRIPT, "r", encoding="utf-8") as f:
+                    self._overlay_code = f.read()
         except Exception:
             pass
 
         self._write_state_file()
+        subprocess.run(["pkill", "-9", "-f", "overlay_ui.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.set_input_locked(False)
         self._protect_veyon_master()
         threading.Thread(target=self._enable_wol_hardware, daemon=True).start()
         threading.Thread(target=self._start_lan_peer_server, daemon=True).start()
@@ -676,6 +682,17 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
     def ensure_overlay_process(self):
         """Giữ tiến trình overlay_ui.py luôn chạy ngầm sẵn trong RAM để bật/tắt khóa màn hình tức thì (< 20ms)"""
         self._write_state_file()
+        is_daemon_overlay = "Pre-Warmed Persistent Daemon" in (self._overlay_code or "")
+        if not is_daemon_overlay and self.mode == "normal":
+            if self.overlay_proc and self.overlay_proc.poll() is None:
+                try:
+                    self.overlay_proc.kill()
+                except Exception:
+                    pass
+                self.overlay_proc = None
+            subprocess.run(["pkill", "-9", "-f", "overlay_ui.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+
         if self.overlay_proc is None or self.overlay_proc.poll() is not None:
             env = self.get_x11_env()
             overlay_path = OVERLAY_SCRIPT if os.path.exists(OVERLAY_SCRIPT) else os.path.join(os.path.dirname(__file__), "overlay_ui.py")
@@ -1329,7 +1346,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             self.ws.send_json(
                 {
                     "type": "STATUS",
-                    "agent_version": "2.5",
+                    "agent_version": "2.6",
                     "machine_id": self.machine_id,
                     "hostname": self.hostname,
                     "ip": self._get_local_ip(),
@@ -1415,7 +1432,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 ws.send_json(
                     {
                         "type": "REGISTER",
-                        "agent_version": "2.5",
+                        "agent_version": "2.6",
                         "machine_id": self.machine_id,
                         "hostname": self.hostname,
                         "ip": self._get_local_ip(),
