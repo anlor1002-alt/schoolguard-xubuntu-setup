@@ -6,6 +6,7 @@ SchoolGuard Xubuntu Fullscreen Overlay UI (Pre-Warmed Persistent Daemon)
 - Khi nhận lệnh UNLOCK (mode = normal) sẽ ẩn cửa sổ và nhả chuột/phím tức thì (< 10ms)
 """
 
+import fcntl
 import json
 import os
 import sys
@@ -14,6 +15,13 @@ from datetime import datetime
 
 STATE_FILE = "/dev/shm/sg_state.json"
 FRAME_FILE = "/dev/shm/sg_broadcast.jpg"
+LOCK_FILE = "/dev/shm/sg_overlay.lock"
+
+try:
+    _lock_fd = open(LOCK_FILE, "w")
+    fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except Exception:
+    sys.exit(0)
 
 HAS_GTK = False
 try:

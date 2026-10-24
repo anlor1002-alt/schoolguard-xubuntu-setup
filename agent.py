@@ -9,6 +9,7 @@ SchoolGuard Root Agent for Xubuntu (Linux XFCE / X11)
 """
 
 import base64
+import fcntl
 import glob
 import hashlib
 import io
@@ -225,6 +226,12 @@ class PureWebSocketClient:
 # ============================================================================
 class XubuntuAgent:
     def __init__(self):
+        try:
+            self._lock_fd = open("/dev/shm/sg_agent.lock", "w")
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except Exception:
+            sys.exit(0)
+
         self.config = self._load_config()
         self.vps_ws = self.config.get("vps_ws", DEFAULT_VPS_WS)
         self.vps_http = self.config.get("vps_http", DEFAULT_VPS_HTTP)
@@ -1340,6 +1347,11 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 except Exception:
                     pass
             subprocess.run(["pkill", "-9", "-f", "overlay_ui.py"], stderr=subprocess.DEVNULL)
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                self._lock_fd.close()
+            except Exception:
+                pass
             os.execv(sys.executable, [sys.executable, my_path])
         except Exception:
             os._exit(0)
