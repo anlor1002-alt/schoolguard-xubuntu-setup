@@ -1,164 +1,111 @@
 # ============================================================================
-# SchoolGuard Pro - Veyon Clean Removal Engine for Windows (Pure ASCII)
-# Buoc 1: Dung, khoa va go bo hoan toan Veyon khoi may hoc sinh Windows
+# SchoolGuard Pro — Headless Veyon Eradicator & Input Rescue (Windows)
 # ============================================================================
+$ErrorActionPreference = "SilentlyContinue"
+$ProgressPreference = "SilentlyContinue"
 
-[CmdletBinding()]
-param()
+function Show-TuiProgress {
+    param([int]$Percent, [string]$Status)
+    $width = 28
+    $filled = [math]::Floor(($Percent * $width) / 100)
+    $empty = $width - $filled
+    $bar = ("#" * $filled) + ("-" * $empty)
+    $pad = $Status.PadRight(44).Substring(0, 44)
+    Write-Host -NoNewline "`r  [$bar] $($Percent.ToString().PadLeft(3))%  $pad" -ForegroundColor Cyan
+}
 
-Write-Host ""
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "    BUOC 1: TIEU DIET & XOA SACH VEYON KHOI MAY HOC SINH        " -ForegroundColor Yellow
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host ""
+Show-TuiProgress -Percent 15 -Status "Unlocking input & Task Manager..."
 
 try {
-    $rescueCode = @"
+    Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public class WinGuardRescue {
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool BlockInput([MarshalAs(UnmanagedType.Bool)] bool fBlockIt);
+public class VeyonInputUnlock {
+    [DllImport("user32.dll")]
+    public static extern bool BlockInput(bool fBlockIt);
 }
-"@
-    Add-Type -TypeDefinition $rescueCode -ErrorAction SilentlyContinue
-    [WinGuardRescue]::BlockInput($false) | Out-Null
-    Write-Host "[*] Da kich hoat lenh giai phong chuot va ban phim (BlockInput false)." -ForegroundColor Green
+"@ -ErrorAction SilentlyContinue
+    [VeyonInputUnlock]::BlockInput($false) | Out-Null
 } catch {}
 
-$policyPaths = @(
-    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System",
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System"
-)
-foreach ($p in $policyPaths) {
-    if (Test-Path $p) {
-        Remove-ItemProperty -Path $p -Name "DisableTaskMgr" -ErrorAction SilentlyContinue
-    }
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -Force -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -Force -ErrorAction SilentlyContinue
+
+Show-TuiProgress -Percent 45 -Status "Stopping Veyon services & processes..."
+
+Stop-Service -Name "VeyonService" -Force -ErrorAction SilentlyContinue
+Set-Service -Name "VeyonService" -StartupType Disabled -ErrorAction SilentlyContinue
+& sc.exe stop VeyonService 2>&1 | Out-Null
+& sc.exe config VeyonService start= disabled 2>&1 | Out-Null
+& sc.exe delete VeyonService 2>&1 | Out-Null
+
+$veyonProcs = @("veyon-service", "veyon-worker", "veyon-server", "veyon-master", "veyon-configurator", "veyon-cli", "veyon*")
+foreach ($p in $veyonProcs) {
+    Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    & taskkill.exe /F /IM "$p.exe" /T 2>&1 | Out-Null
 }
 
-Write-Host "[*] Tieu diet toan bo tien trinh Veyon dang chay..." -ForegroundColor Cyan
-$veyonProcesses = @("VeyonWorker", "VeyonMaster", "VeyonService", "veyon-service", "veyon-worker", "veyon-master", "veyon-configurator", "veyon-server")
+Show-TuiProgress -Percent 75 -Status "Removing Veyon files & registry entries..."
 
-foreach ($procName in $veyonProcesses) {
-    try {
-        $found = Get-Process -Name $procName -ErrorAction SilentlyContinue
-        if ($found) {
-            $found | Stop-Process -Force -ErrorAction SilentlyContinue
-            Write-Host "    -> Da tieu diet tien trinh: $procName" -ForegroundColor Yellow
-        }
-    } catch {}
-    & taskkill.exe /F /IM "$procName.exe" /T 2>$null | Out-Null
-}
-
-Write-Host "[*] Dung va go bo Windows Service (VeyonService)..." -ForegroundColor Cyan
-try {
-    $svc = Get-Service -Name "VeyonService" -ErrorAction SilentlyContinue
-    if ($svc -and $svc.Status -eq "Running") {
-        Stop-Service -Name "VeyonService" -Force -ErrorAction SilentlyContinue
-    }
-} catch {}
-
-& sc.exe stop VeyonService 2>$null | Out-Null
-& sc.exe config VeyonService start= disabled 2>$null | Out-Null
-& sc.exe delete VeyonService 2>$null | Out-Null
-
-Write-Host "[*] Tim kiem va thuc thi trinh go cai dat chinh thuc cua Veyon..." -ForegroundColor Cyan
-
-$uninstallerCandidates = @(
-    "$env:ProgramFiles\Veyon\uninstall.exe",
-    "${env:ProgramFiles(x86)}\Veyon\uninstall.exe",
-    "C:\Program Files\Veyon\uninstall.exe",
-    "C:\Program Files (x86)\Veyon\uninstall.exe"
-)
-
-$uninstallKeys = @(
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-    "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-)
-foreach ($k in $uninstallKeys) {
-    Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*Veyon*" } | ForEach-Object {
-        if ($_.UninstallString) {
-            $cleanPath = $_.UninstallString -replace '"',''
-            if (Test-Path $cleanPath) {
-                $uninstallerCandidates += $cleanPath
-            }
-        }
-    }
-}
-
-foreach ($uPath in ($uninstallerCandidates | Select-Object -Unique)) {
-    if (Test-Path $uPath) {
-        Write-Host "    -> Phat hien trinh go cai dat: $uPath. Dang chay che do im lang (/S)..." -ForegroundColor Green
-        try {
-            Start-Process -FilePath $uPath -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden | Out-Null
-            Start-Sleep -Seconds 2
-            Write-Host "    -> Go cai dat hoan tat!" -ForegroundColor Green
-            break
-        } catch {}
-    }
-}
-
-foreach ($procName in $veyonProcesses) {
-    & taskkill.exe /F /IM "$procName.exe" /T 2>$null | Out-Null
-}
-
-Write-Host "[*] Xoa sach toan bo thu muc du lieu, cau hinh va file thuc thi Veyon..." -ForegroundColor Cyan
-$foldersToRemove = @(
+$veyonDirs = @(
     "$env:ProgramFiles\Veyon",
     "${env:ProgramFiles(x86)}\Veyon",
-    "C:\Program Files\Veyon",
-    "C:\Program Files (x86)\Veyon",
-    "C:\ProgramData\Veyon",
+    "$env:ProgramData\Veyon",
     "$env:APPDATA\Veyon",
-    "$env:LOCALAPPDATA\Veyon",
-    "$env:ALLUSERSPROFILE\Microsoft\Windows\Start Menu\Programs\Veyon",
+    "$env:LOCALAPPDATA\Veyon"
+)
+foreach ($d in $veyonDirs) {
+    if (Test-Path "$d\uninstall.exe") {
+        Start-Process -FilePath "$d\uninstall.exe" -ArgumentList "/S" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $d) {
+        & takeown.exe /F "$d" /R /D Y 2>&1 | Out-Null
+        & icacls.exe "$d" /grant "*S-1-1-0:(OI)(CI)F" /T /C /Q 2>&1 | Out-Null
+        Remove-Item -Path $d -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$shortcutDirs = @(
+    "$env:Public\Desktop",
+    "$env:USERPROFILE\Desktop",
+    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Veyon",
     "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Veyon"
 )
-
-foreach ($f in ($foldersToRemove | Select-Object -Unique)) {
-    if (Test-Path $f) {
-        try {
-            Remove-Item -Path $f -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host "    -> Da xoa thu muc: $f" -ForegroundColor Green
-        } catch {}
+foreach ($sd in $shortcutDirs) {
+    if (Test-Path $sd) {
+        Get-ChildItem -Path $sd -Filter "*Veyon*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
     }
 }
 
-$desktopShortcuts = @(
-    "$env:USERPROFILE\Desktop\*veyon*.lnk",
-    "$env:PUBLIC\Desktop\*veyon*.lnk",
-    "C:\Users\*\Desktop\*veyon*.lnk"
-)
-foreach ($pattern in $desktopShortcuts) {
-    Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
-        } catch {}
-    }
+Remove-Item -Path "HKLM:\SOFTWARE\Veyon Solutions" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "HKCU:\Software\Veyon Solutions" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "Veyon*" -Force -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Veyon*" -Force -ErrorAction SilentlyContinue
+
+Show-TuiProgress -Percent 90 -Status "Activating background Veyon blocker..."
+
+$GuardDir = Join-Path $env:LOCALAPPDATA "SchoolGuard"
+if (-not (Test-Path $GuardDir)) {
+    New-Item -ItemType Directory -Path $GuardDir -Force | Out-Null
 }
-
-$registryKeys = @(
-    "HKLM:\SOFTWARE\Veyon Solutions",
-    "HKLM:\SOFTWARE\WOW6432Node\Veyon Solutions",
-    "HKCU:\Software\Veyon Solutions",
-    "HKLM:\SYSTEM\CurrentControlSet\Services\VeyonService"
-)
-
-foreach ($r in $registryKeys) {
-    if (Test-Path $r) {
-        try {
-            Remove-Item -Path $r -Recurse -Force -ErrorAction SilentlyContinue
-        } catch {}
-    }
+$BlockerScript = Join-Path $GuardDir "veyon_blocker.ps1"
+@"
+`$ErrorActionPreference = 'SilentlyContinue'
+while (`$true) {
+    Get-Process -Name 'veyon*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
 }
+"@ | Set-Content -Path $BlockerScript -Encoding UTF8 -Force
 
-try {
-    [WinGuardRescue]::BlockInput($false) | Out-Null
-} catch {}
+$VbsBlocker = Join-Path $GuardDir "run_blocker.vbs"
+@"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$BlockerScript""", 0, False
+"@ | Set-Content -Path $VbsBlocker -Encoding ASCII -Force
 
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SchoolGuardVeyonBlocker" -Value "wscript.exe //B //NoLogo `"$VbsBlocker`"" -Force -ErrorAction SilentlyContinue
+Start-Process -FilePath "wscript.exe" -ArgumentList "//B //NoLogo `"$VbsBlocker`"" -WindowStyle Hidden -ErrorAction SilentlyContinue
+
+Show-TuiProgress -Percent 100 -Status "Complete"
 Write-Host ""
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host " [OK] DA XOA SACH VA VO HIEU HOA HOAN TOAN VEYON (WINDOWS)!" -ForegroundColor Green
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host ""
+Write-Host "  [OK] Veyon eradicated & blocked (headless mode)." -ForegroundColor Green

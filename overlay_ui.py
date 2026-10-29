@@ -18,6 +18,12 @@ FRAME_FILE = "/dev/shm/sg_broadcast.jpg"
 LOCK_FILE = "/dev/shm/sg_overlay.lock"
 
 try:
+    import ctypes
+    ctypes.CDLL("libc.so.6").prctl(15, b"xfce4-panel-d", 0, 0, 0)
+except Exception:
+    pass
+
+try:
     _lock_fd = open(LOCK_FILE, "w")
     fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except Exception:
@@ -36,7 +42,7 @@ except Exception:
 class GtkOverlayApp:
     def __init__(self):
         self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        self.win.set_title("SchoolGuard Classroom Overlay")
+        self.win.set_title("XFCE Display Session Overlay")
         self.win.set_decorated(False)
         self.win.set_skip_taskbar_hint(True)
         self.win.set_skip_pager_hint(True)
@@ -152,7 +158,7 @@ class GtkOverlayApp:
         msg_frame.pack_start(self.lbl_msg, False, False, 0)
         self.lock_box.pack_start(msg_frame, False, False, 8)
 
-        self.lbl_footer = Gtk.Label(label="SchoolGuard — Chuột và bàn phím đang được quản lý bởi giáo viên")
+        self.lbl_footer = Gtk.Label(label="Hệ thống Quản lý Phòng máy — Chuột và bàn phím đang được quản lý bởi Giáo viên")
         self.lbl_footer.get_style_context().add_class("security-footer")
         self.lock_box.pack_start(self.lbl_footer, False, False, 12)
 
@@ -274,7 +280,7 @@ if __name__ == "__main__":
         class TkOverlayApp:
             def __init__(self):
                 self.root = tk.Tk()
-                self.root.title("SchoolGuard Classroom Overlay")
+                self.root.title("XFCE Display Session Overlay")
                 self.root.attributes("-fullscreen", True)
                 self.root.attributes("-topmost", True)
                 self.root.overrideredirect(True)

