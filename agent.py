@@ -1360,16 +1360,36 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
                 pass
             self._send_status()
 
-        elif cmd == "OPEN_URL":
+        elif cmd in ("OPEN_URL", "open_url"):
             url = payload.get("url", "").strip()
-            if url:
+            if url and not url.startswith(("http://", "https://")):
+                url = "https://" + url
+            if url.startswith(("http://", "https://")):
                 env = self.get_x11_env()
                 user = env.get("SG_DESKTOP_USER", "root")
+                disp = env.get("DISPLAY", ":0")
+                xauth = env.get("XAUTHORITY", "")
+                dbus_addr = env.get("DBUS_SESSION_BUS_ADDRESS", "")
                 try:
-                    if user and user != "root":
-                        subprocess.Popen(["sudo", "-u", user, "xdg-open", url], env=env)
+                    if os.geteuid() == 0 and user and user != "root":
+                        env_args = ["sudo", "-u", user, "env", f"DISPLAY={disp}"]
+                        if xauth:
+                            env_args.append(f"XAUTHORITY={xauth}")
+                        if dbus_addr:
+                            env_args.append(f"DBUS_SESSION_BUS_ADDRESS={dbus_addr}")
+                        env_args.extend([
+                            "sh", "-c",
+                            'xdg-open "$1" >/dev/null 2>&1 || x-www-browser "$1" >/dev/null 2>&1 || firefox "$1" >/dev/null 2>&1 || google-chrome "$1" >/dev/null 2>&1 &',
+                            "--", url
+                        ])
+                        subprocess.Popen(env_args, env=env)
                     else:
-                        subprocess.Popen(["xdg-open", url], env=env)
+                        subprocess.Popen(
+                            ["sh", "-c", 'xdg-open "$1" >/dev/null 2>&1 || x-www-browser "$1" >/dev/null 2>&1 &', "--", url],
+                            env=env,
+                        )
+                    if hasattr(self, "_send_screen_now"):
+                        threading.Timer(1.2, self._send_screen_now).start()
                 except Exception:
                     pass
 
@@ -1473,8 +1493,8 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
                         }
                     )
 
-        elif cmd == "WAKE_ON_LAN":
-            macs = payload.get("macs") or []
+        elif cmd in ("WAKE_ON_LAN", "wol_wake", "wol_all"):
+            macs = list(payload.get("macs") or [])
             if payload.get("mac"):
                 macs.append(payload["mac"])
             try:
@@ -1665,6 +1685,53 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
             "process_count": len(self.running_apps),
             "top_processes": [{"name": a, "pid": 0, "mem_mb": 0, "title": a} for a in self.running_apps[:12]],
         }
+
+    def _get_storage_info(self):
+        if getattr(self, "_cached_storage_info", None):
+            return self._cached_storage_info
+        mount_source = "local-disk"
+        fs_type = "ext4"
+        has_ro_layer = False
+        try:
+            with open("/proc/mounts", "r", errors="ignore") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        if parts[1] == "/":
+                            mount_source = parts[0]
+                            fs_type = parts[2]
+                        elif parts[1] in ("/ro", "/cow", "/upper", "/media/root-ro", "/rofs", "/run/overlayroot"):
+                            has_ro_layer = True
+        except Exception:
+            pass
+        cmdline = ""
+        try:
+            with open("/proc/cmdline", "r", errors="ignore") as f:
+                cmdline = f.read().lower()
+        except Exception:
+            pass
+        total_gb = 0.0
+        try:
+            st = os.statvfs("/")
+            total_gb = (st.f_blocks * st.f_frsize) / 1073741824.0
+        except Exception:
+            pass
+        fs_l = fs_type.lower()
+        src_l = mount_source.lower()
+        is_bootroom = (
+            fs_l in ("overlay", "overlayfs", "tmpfs", "aufs", "squashfs", "nfs", "nfs4", "cifs", "ramfs")
+            or any(t in src_l for t in ("nbd", "iscsi", "aoe", "loop", "overlay", "tmpfs", "ram"))
+            or any(t in cmdline for t in ("boot=casper", "nfsroot=", "nbdroot=", "overlayroot", "toram", "root=/dev/nfs", "root=/dev/nbd", "ltsp", "bootroom", "beetech"))
+            or has_ro_layer
+            or (0 < total_gb <= 16.0)
+        )
+        info = {
+            "disk_mode": "bootroom" if is_bootroom else "persistent",
+            "fs_type": fs_type,
+            "mount_source": mount_source[:64],
+        }
+        self._cached_storage_info = info
+        return info
 
     def _linux_mic_worker(self):
         import array
@@ -1879,7 +1946,7 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
         has_cam, cam_name, _ = self._get_linux_webcam_info()
         payload = {
             "type": msg_type,
-            "agent_version": "3.7",
+            "agent_version": "3.8",
             "machine_id": self.machine_id,
             "hostname": self.hostname,
             "ip": self._get_local_ip(),
@@ -1911,6 +1978,7 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
                 "webcam_name": cam_name,
                 "webcam_streaming": bool(getattr(self, "_webcam_streaming", False)),
             },
+            "storage_info": self._get_storage_info(),
         }
         payload.update(sys_m)
         return payload

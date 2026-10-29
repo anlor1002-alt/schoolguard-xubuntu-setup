@@ -1895,6 +1895,36 @@ function Get-DiskMetrics {
     return @(0, 0, 0)
 }
 
+function Get-StorageInfo {
+    if ($script:cachedStorageInfo) { return $script:cachedStorageInfo }
+    $fsType = "NTFS"
+    $mountSource = "C:"
+    $isBootroom = $false
+    try {
+        $d = [System.IO.DriveInfo]::new("C")
+        if ($d.IsReady -and $d.DriveFormat) { $fsType = [string]$d.DriveFormat }
+        $totGb = if ($d.IsReady -and $d.TotalSize -gt 0) { $d.TotalSize / 1073741824.0 } else { 100.0 }
+        if ($totGb -gt 0 -and $totGb -le 20.0) { $isBootroom = $true }
+    } catch {}
+    try {
+        $disk = Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($disk -and $disk.Model) {
+            $mountSource = ([string]$disk.Model).Trim()
+            if ($mountSource -match "(?i)(iSCSI|CCBoot|iCafe|Gcafe|CSMBoot|Virtual|VHD|RamDisk|Bootroom)") {
+                $isBootroom = $true
+            }
+        }
+        $freezeSvc = Get-Service -Name "ccboot*","icafe*","gcafe*","DFServ*","FrzState*","uwfsvc","fbwf" -ErrorAction SilentlyContinue
+        if ($freezeSvc) { $isBootroom = $true }
+    } catch {}
+    $script:cachedStorageInfo = @{
+        disk_mode    = $(if ($isBootroom) { "bootroom" } else { "persistent" })
+        fs_type      = $fsType
+        mount_source = $mountSource
+    }
+    return $script:cachedStorageInfo
+}
+
 function Update-RunningAppsAndEnforceBlock {
     $protected = @("explorer", "powershell", "pwsh", "cmd", "conhost", "svchost", "csrss", "wininit", "winlogon", "lsass", "services", "smss", "dwm", "sihost", "taskhostw", "ctfmon", "fontdrvhost", "runtimebroker", "searchhost", "startmenuexperiencehost", "shellexperiencehost", "textinputhost", "wscript", "cscript", "idle", "system")
     $alwaysBlocked = @("wireshark", "tshark", "fiddler", "httpdebugger", "charles", "nmap", "zenmap", "veyon-master", "veyon-configurator", "processhacker", "x64dbg", "x32dbg", "cheatengine")
@@ -2000,7 +2030,7 @@ function Build-TelemetryPayload($msgType) {
     $cam = [WinGuardSecurity]::GetWebcamStatus()
     return @{
         type           = $msgType
-        agent_version  = "3.7"
+        agent_version  = "3.8"
         machine_id     = $MACHINE_ID
         hostname       = $HOSTNAME
         ip             = (Get-LocalIp)
@@ -2042,6 +2072,7 @@ function Build-TelemetryPayload($msgType) {
             webcam_name      = [string]$cam[1]
             webcam_streaming = [bool]$cam[2]
         }
+        storage_info   = (Get-StorageInfo)
     }
 }
 
@@ -2253,8 +2284,15 @@ while ($true) {
                                 [WinGuardSecurity]::SetTaskMgrDisabled($false) | Out-Null
                                 Send-WsStatus $ws
                             }
-                            "OPEN_URL" {
-                                if ($payload.url) { Start-Process $payload.url }
+                            { $_ -in @("OPEN_URL", "open_url") } {
+                                if ($payload.url) {
+                                    $u = ([string]$payload.url).Trim()
+                                    if ($u -and ($u -notmatch '^https?://')) { $u = "https://$u" }
+                                    if ($u -match '^https?://') {
+                                        Start-Process $u -ErrorAction SilentlyContinue
+                                        $lastScreenTime = [DateTime]::UtcNow.AddSeconds(-1.2)
+                                    }
+                                }
                             }
                             "SEND_MESSAGE" {
                                 if ($payload.message) {
@@ -2319,11 +2357,18 @@ while ($true) {
                                 [WinGuardSecurity]::SetAudioVolume($vol, $mut)
                                 Send-WsStatus $ws
                             }
-                            "WAKE_ON_LAN" {
+                            { $_ -in @("WAKE_ON_LAN", "wol_wake", "wol_all") } {
                                 try {
                                     $udp = New-Object System.Net.Sockets.UdpClient
                                     $udp.EnableBroadcast = $true
-                                    foreach ($m in $payload.macs) {
+                                    $macList = @()
+                                    if ($payload.macs) { $macList += @($payload.macs) }
+                                    if ($payload.mac)  { $macList += @([string]$payload.mac) }
+                                    $myIpStr = Get-LocalIp
+                                    $ipParts = $myIpStr -split '\.'
+                                    $subBcast = if ($ipParts.Count -eq 4) { "$($ipParts[0]).$($ipParts[1]).$($ipParts[2]).255" } else { "192.168.1.255" }
+                                    $bcastList = @("255.255.255.255", $subBcast, "192.168.1.255", "192.168.0.255") | Select-Object -Unique
+                                    foreach ($m in $macList) {
                                         $hex = ($m -replace '[^0-9a-fA-F]','')
                                         if ($hex.Length -eq 12) {
                                             $macBytes = New-Object byte[] 6
@@ -2331,7 +2376,7 @@ while ($true) {
                                             $packet = New-Object byte[] 102
                                             for ($i=0; $i -lt 6; $i++) { $packet[$i] = 0xFF }
                                             for ($i=1; $i -le 16; $i++) { [Array]::Copy($macBytes, 0, $packet, $i*6, 6) }
-                                            foreach ($ip in @("255.255.255.255","192.168.1.255","192.168.0.255")) {
+                                            foreach ($ip in $bcastList) {
                                                 $udp.Send($packet, $packet.Length, $ip, 9) | Out-Null
                                                 $udp.Send($packet, $packet.Length, $ip, 7) | Out-Null
                                             }

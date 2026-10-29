@@ -417,7 +417,7 @@ VEYON_STATE="Purged & Masked"
 [ "$SKIP_VEYON" = "1" ] && VEYON_STATE="Preserved (Skipped)"
 
 tui_progress 100 "Complete"
-printf "\n  \033[1;32m[OK]\033[0m SchoolGuard v3.7 Headless Deployment Complete\n"
+printf "\n  \033[1;32m[OK]\033[0m SchoolGuard v3.8 Headless Deployment Complete\n"
 printf "       Node & LAN    : %s (%s) | %s | Veyon: %s\n" "$LOCAL_IP" "$(hostname 2>/dev/null || echo 'linux')" "$LAN_SUMMARY" "$VEYON_STATE"
 printf "       Web Dashboard : %s (Port 443 HTTPS / 4000 HTTP | Login: Active)\n" "$DASHBOARD_URL"
 exit 0

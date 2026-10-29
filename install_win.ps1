@@ -245,6 +245,6 @@ if (-not $NoLan -and $lanParts.Count -eq 4 -and $myIp -ne "127.0.0.1") {
 Show-TuiProgress -Percent 100 -Status "Complete"
 $veyonMode = if ($SkipVeyon) { "Preserved (Skipped)" } else { "Uninstalled & Blocked" }
 Write-Host ""
-Write-Host "  [OK] SchoolGuard v3.7 Headless Deployment Complete" -ForegroundColor Green
+Write-Host "  [OK] SchoolGuard v3.8 Headless Deployment Complete" -ForegroundColor Green
 Write-Host "       Node & LAN    : $myIp ($env:COMPUTERNAME) | $lanPeerSummary | Veyon: $veyonMode" -ForegroundColor Gray
 Write-Host "       Web Dashboard : $DashboardUrl (Port 443 HTTPS / 4000 HTTP | Login: Active)" -ForegroundColor Gray
