@@ -1914,7 +1914,8 @@ function Get-StorageInfo {
                 $isBootroom = $true
             }
         }
-        $freezeSvc = Get-Service -Name "ccboot*","icafe*","gcafe*","DFServ*","FrzState*","uwfsvc","fbwf" -ErrorAction SilentlyContinue
+        # Only running services count: uwfsvc/fbwf can be installed but disabled on normal Windows PCs.
+        $freezeSvc = Get-Service -Name "ccboot*","icafe*","gcafe*","DFServ*","FrzState*","uwfsvc","fbwf" -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Running" }
         if ($freezeSvc) { $isBootroom = $true }
     } catch {}
     $script:cachedStorageInfo = @{
