@@ -2185,6 +2185,7 @@ function Invoke-WinFsCommand($ws, $cmd, $payload) {
     )
     $reqPath = if ($payload -and $payload.path) { ([string]$payload.path).Trim() } else { $homeDir }
     if (-not $reqPath) { $reqPath = $homeDir }
+    if ($payload -and $payload.name) { $reqPath = Join-Path $reqPath ([string]$payload.name).Trim() }
 
     if ($cmd -eq "FS_LIST") {
         if (-not (Test-Path -LiteralPath $reqPath -PathType Container)) { $reqPath = $homeDir }

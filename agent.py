@@ -1187,6 +1187,8 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
             {"label": "/tmp", "path": "/tmp"},
         ]
         req_path = str(payload.get("path") or "").strip() or home_dir
+        if payload.get("name"):
+            req_path = os.path.join(req_path, str(payload.get("name")).strip())
         target_path = os.path.abspath(os.path.expanduser(req_path))
 
         if cmd == "FS_LIST":
