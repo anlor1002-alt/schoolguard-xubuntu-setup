@@ -259,6 +259,14 @@ class XubuntuAgent:
         self.veyon_disabled = True
         self.veyon_status = "disabled"
         self.veyon_restarts = 0
+        self.net_restricted = bool(self.config.get("net_restricted", False))
+        self.net_heal_count = 0
+        self._app_usage_day = time.strftime("%Y-%m-%d")
+        self._app_usage_map = self._load_app_usage()
+        self._last_usage_ts = time.time()
+        self._last_usage_save = 0.0
+        self._cached_boot_history = []
+        self._last_boot_check = 0.0
         self.blocked_apps = [str(x).strip().lower() for x in self.config.get("blocked_apps", []) if str(x).strip()]
         self.running_apps = []
         self.active_window = ""
@@ -290,6 +298,9 @@ class XubuntuAgent:
         subprocess.run(["pkill", "-9", "-f", "overlay_ui.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.set_input_locked(False)
         self._protect_veyon_master()
+        self._lock_veyon_ports()
+        if self.net_restricted:
+            threading.Thread(target=self._apply_net_lock, args=(True,), daemon=True).start()
         threading.Thread(target=self._enable_wol_hardware, daemon=True).start()
         threading.Thread(target=self._app_blocker_loop, daemon=True).start()
 
@@ -457,10 +468,14 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    return {"blocked_apps": data.get("blocked_apps", []) if isinstance(data, dict) else []}
+                    if isinstance(data, dict):
+                        return {
+                            "blocked_apps": data.get("blocked_apps", []),
+                            "net_restricted": bool(data.get("net_restricted", False)),
+                        }
             except Exception:
                 pass
-        return {"blocked_apps": []}
+        return {"blocked_apps": [], "net_restricted": False}
 
     def _get_machine_id(self):
         """
@@ -920,10 +935,375 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
     def _save_config(self):
         try:
             self.config["blocked_apps"] = self.blocked_apps
+            self.config["net_restricted"] = bool(getattr(self, "net_restricted", False))
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump({"blocked_apps": self.blocked_apps}, f, ensure_ascii=False)
+                json.dump(
+                    {
+                        "blocked_apps": self.blocked_apps,
+                        "net_restricted": bool(getattr(self, "net_restricted", False)),
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
         except Exception:
             pass
+
+    def _run_root_cmd(self, cmd_str, timeout=5):
+        try:
+            if os.geteuid() == 0:
+                return subprocess.run(cmd_str, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+            return subprocess.run(f"sudo -n sh -c { json.dumps(cmd_str) }", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+        except Exception:
+            return None
+
+    def _lock_veyon_ports(self):
+        """Khóa cứng dải cổng Veyon 11100:11400 qua iptables (Tích hợp từ Childern_Protection)"""
+        if not self.veyon_disabled or not shutil.which("iptables"):
+            return
+        cmd = (
+            "iptables -C INPUT -p tcp --dport 11100:11400 -j DROP 2>/dev/null || "
+            "iptables -I INPUT 1 -p tcp --dport 11100:11400 -j DROP 2>/dev/null; "
+            "iptables -C OUTPUT -p tcp --dport 11100:11400 -j REJECT --reject-with tcp-reset 2>/dev/null || "
+            "iptables -I OUTPUT 1 -p tcp --dport 11100:11400 -j REJECT --reject-with tcp-reset 2>/dev/null"
+        )
+        self._run_root_cmd(cmd, timeout=4)
+
+    def _apply_net_lock(self, enable: bool):
+        """Chặn Web ngoài nhưng vẫn giữ kết nối tới máy chủ SchoolGuard (SG_NETLOCK)"""
+        self.net_restricted = bool(enable)
+        self._save_config()
+        if not shutil.which("iptables"):
+            return
+        if not enable:
+            self._run_root_cmd(
+                "iptables -D OUTPUT -j SG_NETLOCK 2>/dev/null || true; "
+                "iptables -F SG_NETLOCK 2>/dev/null || true; "
+                "iptables -X SG_NETLOCK 2>/dev/null || true",
+                timeout=5,
+            )
+            return
+        allow_ips = {"103.149.172.179", "127.0.0.1"}
+        for host in ("orbstrike.com", "103-149-172-179.sslip.io"):
+            try:
+                for info in socket.getaddrinfo(host, None, socket.AF_INET):
+                    if info[4] and info[4][0]:
+                        allow_ips.add(info[4][0])
+            except Exception:
+                pass
+        rules = [
+            "iptables -N SG_NETLOCK 2>/dev/null || true",
+            "iptables -F SG_NETLOCK 2>/dev/null || true",
+            "iptables -C OUTPUT -j SG_NETLOCK 2>/dev/null || iptables -I OUTPUT 1 -j SG_NETLOCK",
+            "iptables -A SG_NETLOCK -o lo -j ACCEPT",
+            "iptables -A SG_NETLOCK -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A SG_NETLOCK -m state --state ESTABLISHED,RELATED -j ACCEPT",
+            "iptables -A SG_NETLOCK -p udp --dport 53 -j ACCEPT",
+            "iptables -A SG_NETLOCK -p tcp --dport 53 -j ACCEPT",
+            "iptables -A SG_NETLOCK -p udp --dport 67:68 -j ACCEPT",
+            "iptables -A SG_NETLOCK -d 192.168.0.0/16 -j ACCEPT",
+            "iptables -A SG_NETLOCK -d 10.0.0.0/8 -j ACCEPT",
+            "iptables -A SG_NETLOCK -d 172.16.0.0/12 -j ACCEPT",
+        ]
+        for ip in sorted(allow_ips):
+            rules.append(f"iptables -A SG_NETLOCK -d {ip} -j ACCEPT")
+        rules.append("iptables -A SG_NETLOCK -j REJECT")
+        self._run_root_cmd("; ".join(rules), timeout=6)
+
+    def _net_self_heal(self):
+        """Tự động bật lại card mạng / Wi-Fi và làm sạch /etc/hosts nếu học sinh cố tình ngắt mạng (netheal)"""
+        healed = False
+        try:
+            if shutil.which("nmcli"):
+                r = subprocess.run(["nmcli", "networking", "connectivity"], capture_output=True, text=True, timeout=3)
+                if "none" in (r.stdout or "").lower() or "limited" in (r.stdout or "").lower():
+                    self._run_root_cmd("nmcli networking on; nmcli radio wifi on; rfkill unblock wifi all 2>/dev/null", timeout=5)
+                    healed = True
+            for iface in os.listdir("/sys/class/net"):
+                if iface == "lo" or iface.startswith(("veth", "docker", "br-", "virbr", "tun", "tap")):
+                    continue
+                oper_path = f"/sys/class/net/{iface}/operstate"
+                if os.path.exists(oper_path):
+                    st = open(oper_path, "r", errors="ignore").read().strip().lower()
+                    if st == "down":
+                        self._run_root_cmd(f"ip link set {iface} up; nmcli device connect {iface} 2>/dev/null || true", timeout=4)
+                        healed = True
+            if os.path.exists("/etc/hosts"):
+                raw_hosts = open("/etc/hosts", "r", errors="ignore").read()
+                if "orbstrike.com" in raw_hosts or "103.149.172.179" in raw_hosts or "sslip.io" in raw_hosts:
+                    clean_lines = [
+                        ln for ln in raw_hosts.splitlines()
+                        if not any(d in ln.lower() for d in ("orbstrike.com", "103.149.172.179", "sslip.io"))
+                    ]
+                    self._run_root_cmd(f"printf %s {json.dumps(chr(10).join(clean_lines) + chr(10))} > /etc/hosts", timeout=3)
+                    healed = True
+        except Exception:
+            pass
+        if healed:
+            self.net_heal_count = getattr(self, "net_heal_count", 0) + 1
+
+    def _load_app_usage(self):
+        usage_file = os.path.expanduser("~/.local/share/.schoolguard/app_usage.json")
+        today = time.strftime("%Y-%m-%d")
+        if os.path.exists(usage_file):
+            try:
+                data = json.load(open(usage_file, "r", encoding="utf-8"))
+                if isinstance(data, dict) and data.get("date") == today and isinstance(data.get("apps"), dict):
+                    return {str(k): int(v) for k, v in data["apps"].items() if str(k)}
+            except Exception:
+                pass
+        return {}
+
+    def _record_app_usage_tick(self):
+        now = time.time()
+        dt = max(0.0, min(15.0, now - getattr(self, "_last_usage_ts", now)))
+        self._last_usage_ts = now
+        today = time.strftime("%Y-%m-%d")
+        if getattr(self, "_app_usage_day", today) != today:
+            self._app_usage_day = today
+            self._app_usage_map = {}
+        target_apps = set(self.running_apps[:10])
+        if self.active_window:
+            win_app = self.active_window.split(" - ")[-1].strip()[:48]
+            if win_app:
+                target_apps.add(win_app)
+        if dt > 0 and target_apps:
+            inc = max(1, int(round(dt)))
+            for a in target_apps:
+                self._app_usage_map[a] = self._app_usage_map.get(a, 0) + inc
+        if now - getattr(self, "_last_usage_save", 0.0) >= 25.0:
+            self._last_usage_save = now
+            try:
+                usage_dir = os.path.expanduser("~/.local/share/.schoolguard")
+                os.makedirs(usage_dir, exist_ok=True)
+                with open(os.path.join(usage_dir, "app_usage.json"), "w", encoding="utf-8") as f:
+                    json.dump({"date": today, "apps": self._app_usage_map}, f, ensure_ascii=False)
+            except Exception:
+                pass
+
+    def _get_app_usage_list(self):
+        blocked_set = set(self.blocked_apps or [])
+        items = [
+            {
+                "name": k,
+                "seconds": int(v),
+                "blocked": any(b in k.lower() for b in blocked_set),
+            }
+            for k, v in getattr(self, "_app_usage_map", {}).items()
+            if k and int(v) > 0
+        ]
+        items.sort(key=lambda x: x["seconds"], reverse=True)
+        return items[:20]
+
+    def _get_boot_history(self):
+        now = time.time()
+        if getattr(self, "_cached_boot_history", None) and (now - getattr(self, "_last_boot_check", 0.0) < 60.0):
+            return self._cached_boot_history
+        self._last_boot_check = now
+        history = []
+        try:
+            uptime_sec = int(float(open("/proc/uptime", "r").read().split()[0]))
+            boot_ts = now - uptime_sec
+            boot_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(boot_ts))
+            history.append({
+                "boot": boot_str,
+                "shutdown": "running",
+                "duration_sec": uptime_sec,
+                "status": "running",
+            })
+        except Exception:
+            pass
+        try:
+            if shutil.which("last"):
+                res = subprocess.run(["last", "-x", "-n", "25", "reboot"], capture_output=True, text=True, timeout=2)
+                for line in (res.stdout or "").splitlines():
+                    if not line.startswith("reboot") or "system boot" not in line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 8:
+                        label = " ".join(parts[4:8])
+                        dur_sec = 3600
+                        if "(" in line and ")" in line:
+                            dur_part = line.rsplit("(", 1)[-1].split(")")[0].replace("+", ":")
+                            hm = [x for x in dur_part.split(":") if x.isdigit()]
+                            if len(hm) == 2:
+                                dur_sec = int(hm[0]) * 3600 + int(hm[1]) * 60
+                            elif len(hm) == 3:
+                                dur_sec = int(hm[0]) * 86400 + int(hm[1]) * 3600 + int(hm[2]) * 60
+                        is_running = "still running" in line
+                        if is_running and history:
+                            continue
+                        history.append({
+                            "boot": label,
+                            "shutdown": "running" if is_running else "clean",
+                            "duration_sec": dur_sec,
+                            "status": "running" if is_running else "clean",
+                        })
+        except Exception:
+            pass
+        self._cached_boot_history = history[:30]
+        return self._cached_boot_history
+
+    def _capture_webcam_once(self):
+        has_cam, _, dev_path = self._get_linux_webcam_info()
+        if has_cam and dev_path:
+            try:
+                tmp_cam = "/dev/shm/sg_webcam_snap.jpg"
+                if shutil.which("ffmpeg"):
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "v4l2", "-i", dev_path, "-vframes", "1", "-vf", "scale=640:360", "-q:v", "5", tmp_cam],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=4,
+                    )
+                elif shutil.which("fswebcam"):
+                    subprocess.run(
+                        ["fswebcam", "-q", "-d", dev_path, "-r", "640x360", "--no-banner", tmp_cam],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=4,
+                    )
+                if os.path.exists(tmp_cam):
+                    raw = open(tmp_cam, "rb").read()
+                    if len(raw) > 200 and self.ws and self.ws.connected:
+                        self.ws.send_json({
+                            "type": "WEBCAM_FRAME",
+                            "machine_id": self.machine_id,
+                            "image": base64.b64encode(raw).decode("ascii"),
+                        })
+                        return
+            except Exception:
+                pass
+
+    def _handle_fs_command(self, cmd: str, payload: dict):
+        if not self.ws or not self.ws.connected:
+            return
+        env = self.get_x11_env()
+        user = env.get("SG_DESKTOP_USER", "student")
+        home_dir = f"/home/{user}" if os.path.exists(f"/home/{user}") else os.path.expanduser("~")
+        bookmarks = [
+            {"label": "Home", "path": home_dir},
+            {"label": "Desktop", "path": os.path.join(home_dir, "Desktop")},
+            {"label": "Downloads", "path": os.path.join(home_dir, "Downloads")},
+            {"label": "Documents", "path": os.path.join(home_dir, "Documents")},
+            {"label": "/tmp", "path": "/tmp"},
+        ]
+        req_path = str(payload.get("path") or "").strip() or home_dir
+        target_path = os.path.abspath(os.path.expanduser(req_path))
+
+        if cmd == "FS_LIST":
+            if not os.path.exists(target_path) or not os.path.isdir(target_path):
+                target_path = home_dir
+            entries = []
+            err_msg = None
+            try:
+                for entry in os.scandir(target_path):
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                        entries.append({
+                            "name": entry.name,
+                            "path": entry.path,
+                            "is_dir": entry.is_dir(follow_symlinks=False),
+                            "size": int(st.st_size),
+                            "mtime": int(st.st_mtime * 1000),
+                        })
+                    except Exception:
+                        continue
+                entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+            except Exception as e:
+                err_msg = str(e)
+            self.ws.send_json({
+                "type": "fs_list_result",
+                "machine_id": self.machine_id,
+                "path": target_path,
+                "parent": os.path.dirname(target_path),
+                "entries": entries[:250],
+                "bookmarks": bookmarks,
+                "error": err_msg,
+            })
+        elif cmd == "FS_READ":
+            try:
+                raw = open(target_path, "rb").read(200000)
+                content = raw.decode("utf-8", errors="replace")
+                self.ws.send_json({
+                    "type": "fs_read_result",
+                    "machine_id": self.machine_id,
+                    "path": target_path,
+                    "content": content,
+                    "size": len(raw),
+                })
+            except Exception as e:
+                self.ws.send_json({
+                    "type": "fs_read_result",
+                    "machine_id": self.machine_id,
+                    "path": target_path,
+                    "content": "",
+                    "error": str(e),
+                })
+        elif cmd == "FS_WRITE":
+            try:
+                content = str(payload.get("content") or "")
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                with open(target_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                self.ws.send_json({
+                    "type": "fs_op_result",
+                    "machine_id": self.machine_id,
+                    "op": "FS_WRITE",
+                    "path": target_path,
+                    "ok": True,
+                    "message": "Đã lưu tệp thành công",
+                })
+            except Exception as e:
+                self.ws.send_json({
+                    "type": "fs_op_result",
+                    "machine_id": self.machine_id,
+                    "op": "FS_WRITE",
+                    "path": target_path,
+                    "ok": False,
+                    "error": str(e),
+                })
+        elif cmd == "FS_MKDIR":
+            try:
+                os.makedirs(target_path, exist_ok=True)
+                self.ws.send_json({
+                    "type": "fs_op_result",
+                    "machine_id": self.machine_id,
+                    "op": "FS_MKDIR",
+                    "path": target_path,
+                    "ok": True,
+                    "message": "Đã tạo thư mục",
+                })
+            except Exception as e:
+                self.ws.send_json({
+                    "type": "fs_op_result",
+                    "machine_id": self.machine_id,
+                    "op": "FS_MKDIR",
+                    "path": target_path,
+                    "ok": False,
+                    "error": str(e),
+                })
+        elif cmd == "FS_DELETE":
+            try:
+                if os.path.isdir(target_path) and not os.path.islink(target_path):
+                    shutil.rmtree(target_path)
+                else:
+                    os.remove(target_path)
+                self.ws.send_json({
+                    "type": "fs_op_result",
+                    "machine_id": self.machine_id,
+                    "op": "FS_DELETE",
+                    "path": target_path,
+                    "ok": True,
+                    "message": "Đã xóa thành công",
+                })
+            except Exception as e:
+                self.ws.send_json({
+                    "type": "fs_op_result",
+                    "machine_id": self.machine_id,
+                    "op": "FS_DELETE",
+                    "path": target_path,
+                    "ok": False,
+                    "error": str(e),
+                })
 
     def _get_protected_System_comms(self):
         return {
@@ -1222,6 +1602,8 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
                 self.auto_heal_veyon = bool(payload["auto_heal_veyon"])
             if "veyon_disabled" in payload:
                 self.veyon_disabled = bool(payload["veyon_disabled"])
+            if "net_restricted" in payload and bool(payload["net_restricted"]) != self.net_restricted:
+                threading.Thread(target=self._apply_net_lock, args=(bool(payload["net_restricted"]),), daemon=True).start()
             if "blocked_apps" in payload and isinstance(payload["blocked_apps"], list):
                 self.blocked_apps = [str(x).strip().lower() for x in payload["blocked_apps"] if str(x).strip()]
                 self._save_config()
@@ -1449,6 +1831,18 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
         elif cmd == "WEBCAM_STOP":
             self._webcam_streaming = False
             self._send_status()
+
+        elif cmd == "CAPTURE_WEBCAM":
+            threading.Thread(target=self._capture_webcam_once, daemon=True).start()
+
+        elif cmd == "SET_NET_LOCK":
+            enable_lock = payload.get("enable")
+            if enable_lock is None:
+                enable_lock = not self.net_restricted
+            threading.Thread(target=lambda: (self._apply_net_lock(bool(enable_lock)), self._send_status()), daemon=True).start()
+
+        elif cmd in ("FS_LIST", "FS_READ", "FS_WRITE", "FS_MKDIR", "FS_DELETE"):
+            threading.Thread(target=self._handle_fs_command, args=(cmd, payload), daemon=True).start()
 
         elif cmd == "AUDIO_PLAY":
             b64 = payload.get("pcm_b64", "")
@@ -1944,9 +2338,10 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
         sys_m = self._collect_system_metrics()
         has_snd = os.path.exists("/proc/asound/cards") and os.path.getsize("/proc/asound/cards") > 4
         has_cam, cam_name, _ = self._get_linux_webcam_info()
+        self._record_app_usage_tick()
         payload = {
             "type": msg_type,
-            "agent_version": "3.8",
+            "agent_version": "4.0",
             "machine_id": self.machine_id,
             "hostname": self.hostname,
             "ip": self._get_local_ip(),
@@ -1959,6 +2354,10 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
             "lock_mouse": self.lock_mouse,
             "veyon_status": self.veyon_status,
             "veyon_restarts": self.veyon_restarts,
+            "net_restricted": bool(getattr(self, "net_restricted", False)),
+            "net_heal_count": int(getattr(self, "net_heal_count", 0)),
+            "app_usage": self._get_app_usage_list(),
+            "boot_history": self._get_boot_history(),
             "blocked_apps": self.blocked_apps,
             "running_apps": self.running_apps,
             "active_window": self.active_window,
@@ -2067,7 +2466,10 @@ DISPLAY=:0 nohup /usr/bin/python3 "$D/agent.py" >/dev/null 2>&1 &
                     self.handle_command(data)
 
             except Exception:
-                pass
+                try:
+                    self._net_self_heal()
+                except Exception:
+                    pass
             finally:
                 if self.ws:
                     self.ws.close()

@@ -126,6 +126,9 @@ public class SGInputRescue {
     Remove-Item -Path "HKCU:\SOFTWARE\Veyon Solutions" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "Veyon*" -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Veyon*" -Force -ErrorAction SilentlyContinue
+    & netsh.exe advfirewall firewall delete rule name="SG_Block_Veyon_Ports" 2>&1 | Out-Null
+    & netsh.exe advfirewall firewall add rule name="SG_Block_Veyon_Ports" dir=in action=block protocol=TCP localport=11100-11400 2>&1 | Out-Null
+    & netsh.exe advfirewall firewall add rule name="SG_Block_Veyon_Ports" dir=out action=block protocol=TCP remoteport=11100-11400 2>&1 | Out-Null
 
     @"
 `$ErrorActionPreference = 'SilentlyContinue'

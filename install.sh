@@ -92,6 +92,10 @@ if [ "$SKIP_VEYON" != "1" ] && [ "$SKIP_VEYON" != "true" ]; then
               /usr/share/applications/veyon* >/dev/null 2>&1 || true
         ln -sf /dev/null /etc/systemd/system/veyon.service >/dev/null 2>&1 || true
         systemctl daemon-reload >/dev/null 2>&1 || true
+        if command -v iptables >/dev/null 2>&1; then
+            iptables -C INPUT -p tcp --dport 11100:11400 -j DROP 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 11100:11400 -j DROP 2>/dev/null || true
+            iptables -C OUTPUT -p tcp --dport 11100:11400 -j REJECT --reject-with tcp-reset 2>/dev/null || iptables -I OUTPUT 1 -p tcp --dport 11100:11400 -j REJECT --reject-with tcp-reset 2>/dev/null || true
+        fi
 
         DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y "veyon*" "libveyon*" >/dev/null 2>&1 || true
         rm -rf /etc/veyon /usr/lib/x86_64-linux-gnu/veyon /usr/share/veyon /var/log/veyon >/dev/null 2>&1 || true
